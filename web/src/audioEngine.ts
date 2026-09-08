@@ -62,6 +62,7 @@ export class AudioEngine {
       }
     }
     this.stopInternal();
+    this.playing = false;
     this.buffer = buf;
     this.rate = rate;
     this.offset = 0;

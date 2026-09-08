@@ -5,6 +5,11 @@ import (
 	"testing"
 )
 
+func TestFencesInsideComments(t *testing.T) {
+	mustParse(t, "spl 2 8000 0.01 0 # ```\n# ``` ignored\n")
+	expectCode(t, "spl 2 8000 0.01 0\n```", CodeMarkdownFence)
+}
+
 func mustParse(t *testing.T, src string) *Document {
 	t.Helper()
 	doc, diags := Parse([]byte(src))

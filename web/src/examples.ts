@@ -1,13 +1,11 @@
 export interface Example {
   id: string;
-  label: string;
   source: string;
 }
 
 export const EXAMPLES: Example[] = [
   {
     id: 'minimal',
-    label: 'Minimal track',
     source: `spl 2 24000 0.5 0
 
 track
@@ -20,7 +18,6 @@ end
   },
   {
     id: 'three-notes',
-    label: 'Three notes (harmonics)',
     source: `spl 2 24000 1.5 0
 
 harmonics
@@ -46,7 +43,6 @@ end
   },
   {
     id: 'resonances',
-    label: 'Pitched + resonances',
     source: `spl 2 24000 1 0
 
 harmonics
@@ -77,7 +73,6 @@ end
   },
   {
     id: 'metallic',
-    label: 'Metallic impact',
     source: `spl 2 24000 2 42
 
 hit
@@ -116,7 +111,6 @@ end
   },
   {
     id: 'two-noises',
-    label: 'Two moving noises',
     source: `spl 2 24000 3 8
 
 noise

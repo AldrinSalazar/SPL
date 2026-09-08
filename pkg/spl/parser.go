@@ -72,6 +72,9 @@ func ParseWithLimits(input []byte, lim Limits) (*Document, []Diagnostic) {
 	}
 	phys := splitLines(input)
 	for idx, raw := range phys {
+		if h := strings.Index(raw, "#"); h >= 0 {
+			raw = raw[:h]
+		}
 		if strings.Contains(raw, "```") {
 			diags = append(diags, Diagnostic{Code: CodeMarkdownFence,
 				Message: "markdown fences are invalid; provide raw SPL text only",
@@ -131,8 +134,8 @@ func ParseWithLimits(input []byte, lim Limits) (*Document, []Diagnostic) {
 		case "track", "harmonics", "noise", "hit":
 			if len(doc.Blocks) >= lim.MaxBlocks {
 				diags = append(diags, Diagnostic{Code: CodeResourceLimit,
-					Message:   fmt.Sprintf("block count exceeds limit %d", lim.MaxBlocks),
-					Line:      ln.Num, BlockLine: ln.Num})
+					Message: fmt.Sprintf("block count exceeds limit %d", lim.MaxBlocks),
+					Line:    ln.Num, BlockLine: ln.Num})
 				i++
 				continue
 			}
@@ -178,7 +181,7 @@ func ParseWithLimits(input []byte, lim Limits) (*Document, []Diagnostic) {
 		default:
 			diags = append(diags, Diagnostic{Code: CodeUnknownBlock,
 				Message: fmt.Sprintf("unknown command %q; expected track, harmonics, noise, hit, or end", kw),
-				Line: ln.Num, Column: ln.Cols[0]})
+				Line:    ln.Num, Column: ln.Cols[0]})
 			i++
 		}
 	}
@@ -246,39 +249,39 @@ func parseHeader(hdr logicalLine, lim Limits) (rate int, durTok string, dur floa
 	if len(t) != 5 {
 		diags = append(diags, Diagnostic{Code: CodeHeaderFieldCount,
 			Message: fmt.Sprintf("header requires `spl 2 RATE DURATION SEED`; found %d fields", len(t)),
-			Line: hdr.Num, Column: colOf(hdr, 0), Field: "HEADER"})
+			Line:    hdr.Num, Column: colOf(hdr, 0), Field: "HEADER"})
 		return
 	}
 	if t[0] != "spl" {
 		diags = append(diags, Diagnostic{Code: CodeHeaderKeyword,
 			Message: fmt.Sprintf("header must start with `spl`; found %q", t[0]),
-			Line: hdr.Num, Column: colOf(hdr, 0), Field: "HEADER"})
+			Line:    hdr.Num, Column: colOf(hdr, 0), Field: "HEADER"})
 	}
 	if t[1] != "2" {
 		diags = append(diags, Diagnostic{Code: CodeHeaderVersion,
 			Message: fmt.Sprintf("header version must be `2`; found %q", t[1]),
-			Line: hdr.Num, Column: colOf(hdr, 1), Field: "HEADER"})
+			Line:    hdr.Num, Column: colOf(hdr, 1), Field: "HEADER"})
 	}
 	rateTok := t[2]
 	rateOK := false
 	if len(rateTok) > lim.MaxTokenLen {
 		diags = append(diags, Diagnostic{Code: CodeResourceLimit, Field: "RATE",
 			Message: fmt.Sprintf("RATE token length %d exceeds limit %d", len(rateTok), lim.MaxTokenLen),
-			Line: hdr.Num, Column: colOf(hdr, 2)})
+			Line:    hdr.Num, Column: colOf(hdr, 2)})
 	} else if !intPattern.MatchString(rateTok) {
 		diags = append(diags, Diagnostic{Code: CodeRateFormat, Field: "RATE",
 			Message: fmt.Sprintf("RATE %q must match [0-9]+", rateTok),
-			Line: hdr.Num, Column: colOf(hdr, 2)})
+			Line:    hdr.Num, Column: colOf(hdr, 2)})
 	} else {
 		v, err := strconv.Atoi(rateTok)
 		if err != nil {
 			diags = append(diags, Diagnostic{Code: CodeRateRange, Field: "RATE",
 				Message: fmt.Sprintf("RATE %q out of range 8000 through 192000", rateTok),
-				Line: hdr.Num, Column: colOf(hdr, 2)})
+				Line:    hdr.Num, Column: colOf(hdr, 2)})
 		} else if v < 8000 || v > 192000 {
 			diags = append(diags, Diagnostic{Code: CodeRateRange, Field: "RATE",
 				Message: fmt.Sprintf("RATE %d out of range 8000 through 192000", v),
-				Line: hdr.Num, Column: colOf(hdr, 2)})
+				Line:    hdr.Num, Column: colOf(hdr, 2)})
 		} else {
 			rate = v
 			rateOK = true
@@ -289,11 +292,11 @@ func parseHeader(hdr logicalLine, lim Limits) (rate int, durTok string, dur floa
 	if len(dtok) > lim.MaxTokenLen {
 		diags = append(diags, Diagnostic{Code: CodeResourceLimit, Field: "DURATION",
 			Message: fmt.Sprintf("DURATION token length %d exceeds limit %d", len(dtok), lim.MaxTokenLen),
-			Line: hdr.Num, Column: colOf(hdr, 3)})
+			Line:    hdr.Num, Column: colOf(hdr, 3)})
 	} else if !numberPattern.MatchString(dtok) {
 		diags = append(diags, Diagnostic{Code: CodeDurationFormat, Field: "DURATION",
 			Message: fmt.Sprintf("DURATION %q must match -?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?", dtok),
-			Line: hdr.Num, Column: colOf(hdr, 3)})
+			Line:    hdr.Num, Column: colOf(hdr, 3)})
 	} else if ed := checkExponentBound(dtok, lim); ed != nil {
 		ed.Line = hdr.Num
 		ed.Column = colOf(hdr, 3)
@@ -304,11 +307,11 @@ func parseHeader(hdr logicalLine, lim Limits) (rate int, durTok string, dur floa
 		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 			diags = append(diags, Diagnostic{Code: CodeNonfiniteNumber, Field: "DURATION",
 				Message: fmt.Sprintf("DURATION %q must parse to a finite binary64 value", dtok),
-				Line: hdr.Num, Column: colOf(hdr, 3)})
+				Line:    hdr.Num, Column: colOf(hdr, 3)})
 		} else if f <= 0 {
 			diags = append(diags, Diagnostic{Code: CodeDurationRange, Field: "DURATION",
 				Message: fmt.Sprintf("DURATION %s must be positive", dtok),
-				Line: hdr.Num, Column: colOf(hdr, 3)})
+				Line:    hdr.Num, Column: colOf(hdr, 3)})
 		} else {
 			dur = f
 			durTok = dtok
@@ -320,17 +323,17 @@ func parseHeader(hdr logicalLine, lim Limits) (rate int, durTok string, dur floa
 	if len(stok) > lim.MaxTokenLen {
 		diags = append(diags, Diagnostic{Code: CodeResourceLimit, Field: "SEED",
 			Message: fmt.Sprintf("SEED token length %d exceeds limit %d", len(stok), lim.MaxTokenLen),
-			Line: hdr.Num, Column: colOf(hdr, 4)})
+			Line:    hdr.Num, Column: colOf(hdr, 4)})
 	} else if !intPattern.MatchString(stok) {
 		diags = append(diags, Diagnostic{Code: CodeSeedFormat, Field: "SEED",
 			Message: fmt.Sprintf("SEED %q must match [0-9]+", stok),
-			Line: hdr.Num, Column: colOf(hdr, 4)})
+			Line:    hdr.Num, Column: colOf(hdr, 4)})
 	} else {
 		v, err := strconv.ParseUint(stok, 10, 32)
 		if err != nil {
 			diags = append(diags, Diagnostic{Code: CodeSeedRange, Field: "SEED",
 				Message: fmt.Sprintf("SEED %q out of range 0 through 4294967295", stok),
-				Line: hdr.Num, Column: colOf(hdr, 4)})
+				Line:    hdr.Num, Column: colOf(hdr, 4)})
 		} else {
 			seed = uint32(v)
 			seedOK = true
@@ -350,8 +353,8 @@ func parseNumbers(ln logicalLine, want int, what string, lim Limits, blockOpen i
 	if len(t) != want {
 		names := what
 		diags = append(diags, Diagnostic{Code: CodeFieldCount,
-			Message:   fmt.Sprintf("%s requires %d numbers; found %d", names, want, len(t)),
-			Line:      ln.Num, Column: colOf(ln, 0), Field: "FIELD_COUNT", BlockLine: blockOpen})
+			Message: fmt.Sprintf("%s requires %d numbers; found %d", names, want, len(t)),
+			Line:    ln.Num, Column: colOf(ln, 0), Field: "FIELD_COUNT", BlockLine: blockOpen})
 		return nil, diags
 	}
 	vals := make([]float64, want)
@@ -359,13 +362,13 @@ func parseNumbers(ln logicalLine, want int, what string, lim Limits, blockOpen i
 		if len(tok) > lim.MaxTokenLen {
 			diags = append(diags, Diagnostic{Code: CodeResourceLimit,
 				Message: fmt.Sprintf("token length %d exceeds limit %d", len(tok), lim.MaxTokenLen),
-				Line: ln.Num, Column: ln.Cols[i], BlockLine: blockOpen})
+				Line:    ln.Num, Column: ln.Cols[i], BlockLine: blockOpen})
 			return nil, diags
 		}
 		if !numberPattern.MatchString(tok) {
 			diags = append(diags, Diagnostic{Code: CodeNumberFormat,
 				Message: fmt.Sprintf("malformed number %q; expected -?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?", tok),
-				Line: ln.Num, Column: ln.Cols[i], BlockLine: blockOpen})
+				Line:    ln.Num, Column: ln.Cols[i], BlockLine: blockOpen})
 			return nil, diags
 		}
 		if ed := checkExponentBound(tok, lim); ed != nil {
@@ -379,7 +382,7 @@ func parseNumbers(ln logicalLine, want int, what string, lim Limits, blockOpen i
 		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 			diags = append(diags, Diagnostic{Code: CodeNonfiniteNumber,
 				Message: fmt.Sprintf("number %q must parse to a finite binary64 value", tok),
-				Line: ln.Num, Column: ln.Cols[i], BlockLine: blockOpen})
+				Line:    ln.Num, Column: ln.Cols[i], BlockLine: blockOpen})
 			return nil, diags
 		}
 		vals[i] = f
@@ -397,7 +400,7 @@ func parseTrack(logical []logicalLine, start int, lim Limits, totalRows *int) (*
 	if len(open.Tokens) != 1 {
 		diags = append(diags, Diagnostic{Code: CodeFieldCount,
 			Message: fmt.Sprintf("`track` takes no fields; found %d", len(open.Tokens)-1),
-			Line: open.Num, Column: colOf(open, 1), BlockLine: open.Num})
+			Line:    open.Num, Column: colOf(open, 1), BlockLine: open.Num})
 	}
 	b := &TrackBlock{Open: open.Num}
 	i := start + 1
@@ -410,7 +413,7 @@ func parseTrack(logical []logicalLine, start int, lim Limits, totalRows *int) (*
 			if len(ln.Tokens) != 1 {
 				diags = append(diags, Diagnostic{Code: CodeFieldCount,
 					Message: fmt.Sprintf("`end` takes no fields; found %d", len(ln.Tokens)-1),
-					Line: ln.Num, Column: colOf(ln, 1), BlockLine: open.Num})
+					Line:    ln.Num, Column: colOf(ln, 1), BlockLine: open.Num})
 			}
 			b.Close = ln.Num
 			closed = true
@@ -431,7 +434,7 @@ func parseTrack(logical []logicalLine, start int, lim Limits, totalRows *int) (*
 		if rows > lim.MaxRowsPerBlock {
 			diags = append(diags, Diagnostic{Code: CodeResourceLimit,
 				Message: fmt.Sprintf("row count exceeds per-block limit %d", lim.MaxRowsPerBlock),
-				Line: ln.Num, BlockLine: open.Num})
+				Line:    ln.Num, BlockLine: open.Num})
 			i++
 			continue
 		}
@@ -447,7 +450,7 @@ func parseTrack(logical []logicalLine, start int, lim Limits, totalRows *int) (*
 	if !closed {
 		diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 			Message: fmt.Sprintf("expected end for track opened on line %d", open.Num),
-			Line: open.Num, BlockLine: open.Num})
+			Line:    open.Num, BlockLine: open.Num})
 		b.Close = open.Num
 	}
 	return b, i, diags
@@ -459,7 +462,7 @@ func parseNoise(logical []logicalLine, start int, lim Limits, totalRows *int, in
 	if len(open.Tokens) != 1 {
 		diags = append(diags, Diagnostic{Code: CodeFieldCount,
 			Message: fmt.Sprintf("`noise` takes no fields; found %d", len(open.Tokens)-1),
-			Line: open.Num, Column: colOf(open, 1), BlockLine: open.Num})
+			Line:    open.Num, Column: colOf(open, 1), BlockLine: open.Num})
 	}
 	b := &NoiseBlock{Open: open.Num, Index: index}
 	i := start + 1
@@ -472,7 +475,7 @@ func parseNoise(logical []logicalLine, start int, lim Limits, totalRows *int, in
 			if len(ln.Tokens) != 1 {
 				diags = append(diags, Diagnostic{Code: CodeFieldCount,
 					Message: fmt.Sprintf("`end` takes no fields; found %d", len(ln.Tokens)-1),
-					Line: ln.Num, Column: colOf(ln, 1), BlockLine: open.Num})
+					Line:    ln.Num, Column: colOf(ln, 1), BlockLine: open.Num})
 			}
 			b.Close = ln.Num
 			closed = true
@@ -493,7 +496,7 @@ func parseNoise(logical []logicalLine, start int, lim Limits, totalRows *int, in
 		if rows > lim.MaxRowsPerBlock {
 			diags = append(diags, Diagnostic{Code: CodeResourceLimit,
 				Message: fmt.Sprintf("row count exceeds per-block limit %d", lim.MaxRowsPerBlock),
-				Line: ln.Num, BlockLine: open.Num})
+				Line:    ln.Num, BlockLine: open.Num})
 			i++
 			continue
 		}
@@ -509,7 +512,7 @@ func parseNoise(logical []logicalLine, start int, lim Limits, totalRows *int, in
 	if !closed {
 		diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 			Message: fmt.Sprintf("expected end for noise opened on line %d", open.Num),
-			Line: open.Num, BlockLine: open.Num})
+			Line:    open.Num, BlockLine: open.Num})
 		b.Close = open.Num
 	}
 	return b, i, diags
@@ -521,7 +524,7 @@ func parseHit(logical []logicalLine, start int, lim Limits, totalRows *int) (*Hi
 	if len(open.Tokens) != 1 {
 		diags = append(diags, Diagnostic{Code: CodeFieldCount,
 			Message: fmt.Sprintf("`hit` takes no fields; found %d", len(open.Tokens)-1),
-			Line: open.Num, Column: colOf(open, 1), BlockLine: open.Num})
+			Line:    open.Num, Column: colOf(open, 1), BlockLine: open.Num})
 	}
 	b := &HitBlock{Open: open.Num}
 	i := start + 1
@@ -534,7 +537,7 @@ func parseHit(logical []logicalLine, start int, lim Limits, totalRows *int) (*Hi
 			if len(ln.Tokens) != 1 {
 				diags = append(diags, Diagnostic{Code: CodeFieldCount,
 					Message: fmt.Sprintf("`end` takes no fields; found %d", len(ln.Tokens)-1),
-					Line: ln.Num, Column: colOf(ln, 1), BlockLine: open.Num})
+					Line:    ln.Num, Column: colOf(ln, 1), BlockLine: open.Num})
 			}
 			b.Close = ln.Num
 			closed = true
@@ -555,7 +558,7 @@ func parseHit(logical []logicalLine, start int, lim Limits, totalRows *int) (*Hi
 		if rows > lim.MaxRowsPerBlock {
 			diags = append(diags, Diagnostic{Code: CodeResourceLimit,
 				Message: fmt.Sprintf("row count exceeds per-block limit %d", lim.MaxRowsPerBlock),
-				Line: ln.Num, BlockLine: open.Num})
+				Line:    ln.Num, BlockLine: open.Num})
 			i++
 			continue
 		}
@@ -571,7 +574,7 @@ func parseHit(logical []logicalLine, start int, lim Limits, totalRows *int) (*Hi
 	if !closed {
 		diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 			Message: fmt.Sprintf("expected end for hit opened on line %d", open.Num),
-			Line: open.Num, BlockLine: open.Num})
+			Line:    open.Num, BlockLine: open.Num})
 		b.Close = open.Num
 	}
 	return b, i, diags
@@ -583,7 +586,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 	if len(open.Tokens) != 1 {
 		diags = append(diags, Diagnostic{Code: CodeFieldCount,
 			Message: fmt.Sprintf("`harmonics` takes no fields; found %d", len(open.Tokens)-1),
-			Line: open.Num, Column: colOf(open, 1), BlockLine: open.Num})
+			Line:    open.Num, Column: colOf(open, 1), BlockLine: open.Num})
 	}
 	b := &HarmonicsBlock{Open: open.Num}
 	i := start + 1
@@ -597,7 +600,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 		}
 		diags = append(diags, Diagnostic{Code: CodeSectionRequired,
 			Message: fmt.Sprintf("harmonics requires spectrum before curve; found %s", got),
-			Line: line, BlockLine: open.Num})
+			Line:    line, BlockLine: open.Num})
 		// Recovery: if next is curve, continue to curve; if end or block start or EOF, close.
 		if i < len(logical) && logical[i].Tokens[0] == "curve" {
 			// fall through to curve handling with empty spectrum
@@ -608,7 +611,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 		} else if i >= len(logical) || isBlockStart(logical[i].Tokens[0]) {
 			diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 				Message: fmt.Sprintf("expected end for harmonics opened on line %d", open.Num),
-				Line: open.Num, BlockLine: open.Num})
+				Line:    open.Num, BlockLine: open.Num})
 			b.Close = open.Num
 			return b, i, diags
 		} else {
@@ -625,7 +628,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 			if i >= len(logical) || isBlockStart(logical[i].Tokens[0]) {
 				diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 					Message: fmt.Sprintf("expected end for harmonics opened on line %d", open.Num),
-					Line: open.Num, BlockLine: open.Num})
+					Line:    open.Num, BlockLine: open.Num})
 				b.Close = open.Num
 				return b, i, diags
 			}
@@ -672,7 +675,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 				Message: "harmonics requires spectrum before curve", Line: open.Num, BlockLine: open.Num})
 			diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 				Message: fmt.Sprintf("expected end for harmonics opened on line %d", open.Num),
-				Line: open.Num, BlockLine: open.Num})
+				Line:    open.Num, BlockLine: open.Num})
 			b.Close = open.Num
 			return b, i, diags
 		}
@@ -687,7 +690,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 		if specRows > lim.MaxRowsPerBlock {
 			diags = append(diags, Diagnostic{Code: CodeResourceLimit,
 				Message: fmt.Sprintf("row count exceeds per-block limit %d", lim.MaxRowsPerBlock),
-				Line: ln.Num, BlockLine: open.Num})
+				Line:    ln.Num, BlockLine: open.Num})
 			i++
 			continue
 		}
@@ -709,7 +712,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 				Message: "harmonics requires spectrum before curve", Line: open.Num, BlockLine: open.Num})
 			diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 				Message: fmt.Sprintf("expected end for harmonics opened on line %d", open.Num),
-				Line: open.Num, BlockLine: open.Num})
+				Line:    open.Num, BlockLine: open.Num})
 			b.Close = open.Num
 			return b, i, diags
 		}
@@ -754,7 +757,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 		if curveRows+specRows > lim.MaxRowsPerBlock {
 			diags = append(diags, Diagnostic{Code: CodeResourceLimit,
 				Message: fmt.Sprintf("row count exceeds per-block limit %d", lim.MaxRowsPerBlock),
-				Line: ln.Num, BlockLine: open.Num})
+				Line:    ln.Num, BlockLine: open.Num})
 			i++
 			continue
 		}
@@ -770,7 +773,7 @@ func parseHarmonics(logical []logicalLine, start int, lim Limits, totalRows *int
 	if !closed {
 		diags = append(diags, Diagnostic{Code: CodeUnclosedBlock,
 			Message: fmt.Sprintf("expected end for harmonics opened on line %d", open.Num),
-			Line: open.Num, BlockLine: open.Num})
+			Line:    open.Num, BlockLine: open.Num})
 		b.Close = open.Num
 	}
 	return b, i, diags

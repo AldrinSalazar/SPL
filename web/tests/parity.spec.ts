@@ -48,9 +48,9 @@ for (const c of PARITY_CASES) {
 
     await page.goto('./');
     await expect(page.getByRole('status').first()).toContainText(/ready|render/i, { timeout: 60000 });
-    await page.getByLabel('Example').selectOption(c.example);
+    await page.getByRole('button', { name: ({ minimal: 'Pure tone', metallic: 'Metallic impact', 'two-noises': 'Moving noise' } as Record<string, string>)[c.example], exact: true }).click();
     await page.getByRole('button', { name: 'Render', exact: true }).click();
-    await expect(page.getByText('render complete', { exact: false })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole('status').first()).toContainText('Render complete', { timeout: 60000 });
 
     const wavPromise = page.waitForEvent('download');
     await page.getByRole('link', { name: /WAV/ }).click();

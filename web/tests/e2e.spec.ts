@@ -14,15 +14,15 @@ end
 test.describe('SPL browser app', () => {
   test('initializes and renders minimal example', async ({ page }) => {
     await page.goto('./');
-    await expect(page.getByRole('heading', { name: /SPL/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'SPL home' })).toBeVisible();
     // Wait for worker ready.
     await expect(page.getByRole('status').first()).toContainText(/ready|render/i, { timeout: 60000 });
     // Select minimal example.
-    await page.getByLabel('Example').selectOption('minimal');
+    await page.getByRole('button', { name: 'Pure tone', exact: true }).click();
     await page.getByRole('button', { name: 'Render', exact: true }).click();
-    await expect(page.getByText('render complete', { exact: false })).toBeVisible({ timeout: 60000 });
-    await expect(page.getByText('Sample rate', { exact: true })).toBeVisible();
-    await expect(page.locator('img[alt*="spectrogram"]')).toBeVisible();
+    await expect(page.getByRole('status').first()).toContainText('Render complete', { timeout: 60000 });
+    await expect(page.getByLabel('Sample rate')).toBeVisible();
+    await expect(page.locator('canvas')).toBeVisible();
   });
 
   test('invalid input shows source-linked diagnostics', async ({ page }) => {
@@ -47,19 +47,19 @@ test.describe('SPL browser app', () => {
   test('stale indicator after edit', async ({ page }) => {
     await page.goto('./');
     await expect(page.getByRole('status').first()).toContainText(/ready|render/i, { timeout: 60000 });
-    await page.getByLabel('Example').selectOption('minimal');
+    await page.getByRole('button', { name: 'Pure tone', exact: true }).click();
     await page.getByRole('button', { name: 'Render', exact: true }).click();
-    await expect(page.getByText('render complete', { exact: false })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole('status').first()).toContainText('Render complete', { timeout: 60000 });
     await page.getByLabel('SPL source').fill(MINIMAL + '# edited\n');
-    await expect(page.getByText(/earlier editor revision/)).toBeVisible();
+    await expect(page.getByText('Edited', { exact: true })).toBeVisible();
   });
 
   test('downloads verify WAV and PNG contents', async ({ page }) => {
     await page.goto('./');
     await expect(page.getByRole('status').first()).toContainText(/ready|render/i, { timeout: 60000 });
-    await page.getByLabel('Example').selectOption('minimal');
+    await page.getByRole('button', { name: 'Pure tone', exact: true }).click();
     await page.getByRole('button', { name: 'Render', exact: true }).click();
-    await expect(page.getByText('render complete', { exact: false })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole('status').first()).toContainText('Render complete', { timeout: 60000 });
     // WAV download.
     const wavPromise = page.waitForEvent('download');
     await page.getByRole('link', { name: /WAV/ }).click();
@@ -87,12 +87,13 @@ test.describe('SPL browser app', () => {
   test('spectrogram apply does not rerender audio', async ({ page }) => {
     await page.goto('./');
     await expect(page.getByRole('status').first()).toContainText(/ready|render/i, { timeout: 60000 });
-    await page.getByLabel('Example').selectOption('minimal');
+    await page.getByRole('button', { name: 'Pure tone', exact: true }).click();
     await page.getByRole('button', { name: 'Render', exact: true }).click();
-    await expect(page.getByText('render complete', { exact: false })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole('status').first()).toContainText('Render complete', { timeout: 60000 });
+    await page.getByRole('button', { name: 'Analysis settings' }).click();
     await page.getByLabel('dB min').fill('-80');
     await page.getByRole('button', { name: /Apply/ }).click();
-    await expect(page.getByText(/not rerendered/)).toBeVisible({ timeout: 30000 });
+    await expect(page.getByText('Spectrogram updated', { exact: true })).toBeVisible({ timeout: 30000 });
   });
 
   test('cancel followed by rerender', async ({ page }) => {
@@ -109,8 +110,8 @@ test.describe('SPL browser app', () => {
       await expect(page.getByText(/cancell?ed/i)).toBeVisible({ timeout: 30000 });
     }
     // Rerender minimal must succeed after cancel.
-    await page.getByLabel('Example').selectOption('minimal');
+    await page.getByRole('button', { name: 'Pure tone', exact: true }).click();
     await page.getByRole('button', { name: 'Render', exact: true }).click();
-    await expect(page.getByText('render complete', { exact: false })).toBeVisible({ timeout: 60000 });
+    await expect(page.getByRole('status').first()).toContainText('Render complete', { timeout: 60000 });
   });
 });

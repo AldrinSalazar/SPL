@@ -206,9 +206,15 @@ func interpSpectrum(spec []spl.SpectrumRow, f float64, seg *int) float64 {
 	f1 := spec[i+1].Freq
 	w0 := spec[i].Weight
 	w1 := spec[i+1].Weight
+	if f == f0 {
+		return w0
+	}
+	if f == f1 {
+		return w1
+	}
 	if f1 == f0 {
 		return w0
 	}
 	frac := (f - f0) / (f1 - f0)
-	return w0 + (w1-w0)*frac
+	return (1-frac)*w0 + frac*w1
 }

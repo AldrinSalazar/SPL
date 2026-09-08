@@ -12,6 +12,7 @@ export class WorkerClient {
   }>();
   private readyPromise: Promise<void> | null = null;
   private readyResolve: (() => void) | null = null;
+  private readyReject: ((error: Error) => void) | null = null;
   private wasmUrl: string;
   private jsUrl: string;
 
@@ -31,11 +32,11 @@ export class WorkerClient {
       for (const [, p] of this.pending) p.reject(new Error('worker error: ' + (e.message || 'unknown')));
       this.pending.clear();
     };
-    this.readyPromise = new Promise((res) => { this.readyResolve = res; });
+    this.readyPromise = new Promise((res, rej) => { this.readyResolve = res; this.readyReject = rej; });
     const id = nextId++;
     this.pending.set(id, {
       resolve: () => { this.readyResolve?.(); },
-      reject: () => { this.readyResolve?.(); }
+      reject: (error) => { this.readyReject?.(error); }
     });
     this.worker.postMessage({ id, type: 'init', wasmUrl: this.wasmUrl, jsUrl: this.jsUrl });
   }

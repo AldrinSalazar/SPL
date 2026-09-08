@@ -1,12 +1,34 @@
+# Native CLI binaries (see scripts/build-all.*)
+spl
 spl.exe
 spl-test.exe
+
+# Example render outputs from README commands
+output.wav
+output.png
+
+# Go coverage
+coverage.out
+coverage.html
+*.test
+
+# Web dependencies and build outputs
+node_modules/
 /web/node_modules/
 /web/dist/
+/web/coverage/
 /web/test-results/
 /web/playwright-report/
+
+# Go WASM engine assets (rebuilt by web/scripts/build-wasm.mjs)
 /web/public/spl.wasm
 /web/public/wasm_exec.js
 /web/public/wasm-info.json
 /web/tsconfig.tsbuildinfo
+
+# Local test scratch space
 testdata/tmp/
-node_modules/
+
+# OS artifacts
+.DS_Store
+Thumbs.db

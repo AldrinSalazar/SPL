@@ -161,12 +161,8 @@ func renderFn(this js.Value, args []js.Value) (out any) {
 		return diagErrorObj([]spl.Diagnostic{*ed})
 	}
 	elapsed := time.Since(start)
-	// Cache PCM for spectrogram-only requests.
-	cachedPCM = res.Samples
-	cachedRate = res.Rate
-	cachedDur = doc.Duration
-	cachedSpec = nil
-	cachedFFT, cachedHop = 0, 0
+	// Commit the complete result only after every requested export succeeds.
+	var nextSpec *spectrogram.Result
 
 	obj := js.Global().Get("Object").New()
 	obj.Set("ok", true)
@@ -207,8 +203,7 @@ func renderFn(this js.Value, args []js.Value) (out any) {
 		if sd != nil {
 			return diagErrorObj([]spl.Diagnostic{*sd})
 		}
-		cachedSpec = specRes
-		cachedFFT, cachedHop = opts.FFTLen, opts.Hop
+		nextSpec = specRes
 		pngBytes, disp, pd := spectrogram.EncodeSpectrogramPNG(specRes,
 			&spectrogram.PNGOptions{PlotWidth: opts.PlotW, PlotHeight: opts.PlotH, DBMin: opts.DBMin, DBMax: opts.DBMax})
 		if pd != nil {
@@ -231,6 +226,9 @@ func renderFn(this js.Value, args []js.Value) (out any) {
 			obj.Set("displayMeta", string(meta))
 		}
 	}
+	cachedPCM, cachedRate, cachedDur = res.Samples, res.Rate, doc.Duration
+	cachedSpec = nextSpec
+	cachedFFT, cachedHop = opts.FFTLen, opts.Hop
 	return obj
 }
 

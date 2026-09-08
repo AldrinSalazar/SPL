@@ -126,8 +126,8 @@ func ComputeSpectrogram(pcm []float64, rate int, opts *Options, lim spl.Limits) 
 		// Scale to avoid FFT overflow for huge signals.
 		scale := 1.0
 		// Worst-case sum magnitude <= fftLen*maxAbs.
-		if float64(fftLen)*maxAbs > 1e300 {
-			scale = float64(fftLen) * maxAbs / 1e300
+		if maxAbs > 1e300/float64(fftLen) {
+			scale = maxAbs / (1e300 / float64(fftLen))
 		}
 		for j := 0; j < fftLen; j++ {
 			idx := c - half + j

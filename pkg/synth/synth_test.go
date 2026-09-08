@@ -20,6 +20,13 @@ func renderSrc(t *testing.T, src string) []float64 {
 	return res.Samples
 }
 
+func TestSpectrumExactEndpointWithLargeDynamicRange(t *testing.T) {
+	pcm := renderSrc(t, "spl 2 8000 0.001 0\nharmonics\nspectrum\n100 1e20\n200 1\ncurve\n0 200 1\n0.001 200 1\nend\n")
+	if pcm[0] != 1 {
+		t.Fatalf("endpoint sample = %g, want 1", pcm[0])
+	}
+}
+
 func TestConstantCosine(t *testing.T) {
 	// 440Hz constant, gain envelope 0->0.5 quickly then hold.
 	src := "spl 2 24000 0.05 0\ntrack\n0 440 0.5\n0.05 440 0.5\nend\n"

@@ -1,681 +1,338 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  AudioWaveform, Play, Pause, Square, RotateCcw, Download, FileAudio,
-  FileImage, FileText, TriangleAlert, CircleAlert, Moon, Sun, Loader2,
-  Activity, Clock, Hash, Gauge, Timer, SlidersHorizontal, ListMusic, X, Sparkles
-} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AudioWaveform, Play, Pause, Square, Download, SlidersHorizontal, Volume2, Plus, FileCode2, Loader2, X, Pencil } from 'lucide-react';
 import { EXAMPLES } from './examples';
 import { WorkerClient } from './workerClient';
 import { AudioEngine } from './audioEngine';
-import type { Diagnostic, DisplayMeta, RenderOpts, RenderStats } from './types';
-import { Button } from './components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
-import { Badge } from './components/ui/badge';
-import { Label } from './components/ui/label';
-import { Input } from './components/ui/input';
-import { NativeSelect } from './components/ui/select';
-import { Slider } from './components/ui/slider';
-import { Progress } from './components/ui/progress';
-import { Separator } from './components/ui/separator';
-import { Alert, AlertDescription, AlertTitle } from './components/ui/alert';
-import { cn } from './lib/utils';
+import type { Diagnostic, DisplayMeta, RenderOpts, RenderResult } from './types';
 
-const DEFAULT_OPTS: RenderOpts = { fftLen: 2048, hop: 256, dbMin: -100, dbMax: 0, plotW: 1000, plotH: 500 };
+const DEFAULTS: RenderOpts = { fftLen: 2048, hop: 256, dbMin: -100, dbMax: 0, plotW: 1000, plotH: 500 };
+const LABELS = ['Pure tone', 'Three notes', 'Two resonances', 'Metallic impact', 'Moving noise'];
+const time = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toFixed(2).padStart(5, '0')}`;
 
-function fmtFreq(f: number): string {
-  if (f >= 1000) return `${(f / 1000).toFixed(2)} kHz`;
-  return `${f.toFixed(1)} Hz`;
+interface UserSound { id: string; name: string; source: string; updatedAt: number; }
+
+const STORAGE_KEY = 'spl-studio:sounds:v1';
+const MAX_SOUNDS = 60;
+const MAX_DROP_BYTES = 1_000_000; // matches Go BrowserLimits MaxInputBytes
+
+function loadSounds(): UserSound[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((s: any): s is UserSound =>
+      s && typeof s.id === 'string' && typeof s.name === 'string' && typeof s.source === 'string'
+    ).slice(0, MAX_SOUNDS);
+  } catch { return []; }
 }
 
-function useTheme() {
-  const [dark, setDark] = useState(() =>
-    typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : false
-  );
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', dark);
-    try {
-      localStorage.setItem('spl-theme', dark ? 'dark' : 'light');
-    } catch { /* ignore */ }
-  }, [dark]);
-  return { dark, toggle: () => setDark((d) => !d) };
+function persistSounds(next: UserSound[]): boolean {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    return true;
+  } catch { return false; }
 }
+
+const uid = () => `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const safeFileStem = (name: string) => name.trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, ' ').slice(0, 60) || 'sound';
 
 export default function App() {
   const [source, setSource] = useState(EXAMPLES[3].source);
-  const [exampleId, setExampleId] = useState('metallic');
+  const [example, setExample] = useState(EXAMPLES[3].id);
   const [revision, setRevision] = useState(0);
-  const [resultRevision, setResultRevision] = useState<number | null>(null);
-  const [diags, setDiags] = useState<Diagnostic[]>([]);
-  const [warnings, setWarnings] = useState<Diagnostic[]>([]);
-  const [stats, setStats] = useState<RenderStats | null>(null);
-  const [rendering, setRendering] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [status, setStatus] = useState('initializing worker…');
-  const [workerError, setWorkerError] = useState<string | null>(null);
-  const [wavUrl, setWavUrl] = useState<string | null>(null);
-  const [pngUrl, setPngUrl] = useState<string | null>(null);
-  const [displayMeta, setDisplayMeta] = useState<DisplayMeta | null>(null);
-  const [displayData, setDisplayData] = useState<Float32Array | null>(null);
-  const [cursor, setCursor] = useState<string>('hover the spectrogram');
-  const [volume, setVolume] = useState(0.2);
+  const [resultRevision, setResultRevision] = useState(-1);
+  const [result, setResult] = useState<RenderResult | null>(null);
+  const [status, setStatus] = useState('Initializing');
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState<'render' | 'analysis' | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState('');
+  const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
+  const [urls, setUrls] = useState({ wav: '', png: '' });
+  const [opts, setOpts] = useState(DEFAULTS);
+  const [settings, setSettings] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [pos, setPos] = useState(0);
-  const [playbackNote, setPlaybackNote] = useState<string | null>(null);
-  const [opts, setOpts] = useState<RenderOpts>({ ...DEFAULT_OPTS });
-  const [applyingSpec, setApplyingSpec] = useState(false);
-  const { dark, toggle } = useTheme();
-
-  const clientRef = useRef<WorkerClient | null>(null);
-  const audioRef = useRef<AudioEngine | null>(null);
-  const editorRef = useRef<HTMLTextAreaElement | null>(null);
-  const gutterRef = useRef<HTMLDivElement | null>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const reqIdRef = useRef(0);
+  const [position, setPosition] = useState(0);
+  const [volume, setVolume] = useState(0.2);
+  const [cursor, setCursor] = useState('');
+  const [cacheAvailable, setCacheAvailable] = useState(false);
+  const [buildInfo, setBuildInfo] = useState({ go: '', builtAt: '' });
+  const [sounds, setSounds] = useState<UserSound[]>(loadSounds);
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const renameDone = useRef(false);
+  const dragCount = useRef(0);
+  const client = useRef<WorkerClient | null>(null);
+  const audio = useRef<AudioEngine | null>(null);
+  const editor = useRef<HTMLTextAreaElement>(null);
+  const gutter = useRef<HTMLDivElement>(null);
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const request = useRef(0);
+  const loadedPCM = useRef<ArrayBuffer | null>(null);
+  const urlsRef = useRef(urls);
 
   useEffect(() => {
-    const client = new WorkerClient();
-    clientRef.current = client;
-    const audio = new AudioEngine();
-    audioRef.current = audio;
-    audio.onEnded = () => { setPlaying(false); setPos(audio.position); };
-    audio.onTick = (p) => setPos(p);
-    client.ready().then(() => setStatus('ready')).catch((e) => {
-      setWorkerError('WASM initialization failed: ' + (e?.message ?? e));
-      setStatus('worker failed');
-    });
+    let active = true;
+    const c = new WorkerClient(); client.current = c;
+    const a = new AudioEngine(); audio.current = a;
+    a.onEnded = () => { setPlaying(false); setPosition(a.position); };
+    a.onTick = setPosition;
+    c.ready().then(() => { if (active) { setReady(true); setStatus('Ready'); } })
+      .catch(e => { if (active) { setError(`WASM initialization failed: ${e.message}`); setStatus('Worker failed'); } });
     return () => {
-      client.dispose();
-      audio.dispose();
-      if (wavUrl) URL.revokeObjectURL(wavUrl);
-      if (pngUrl) URL.revokeObjectURL(pngUrl);
+      active = false; c.dispose(); a.dispose();
+      Object.values(urlsRef.current).forEach(u => { if (u) URL.revokeObjectURL(u); });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Build metadata (Go toolchain + compilation date) written by scripts/build-wasm.mjs.
   useEffect(() => {
-    audioRef.current?.setVolume(volume);
-  }, [volume]);
+    let active = true;
+    const base = import.meta.env.BASE_URL || './';
+    fetch(new URL(base + 'wasm-info.json', window.location.href).href)
+      .then(r => (r.ok ? r.json() : null))
+      .then(info => {
+        if (!active || !info) return;
+        const parts = String(info.goVersion || '').split(' ').filter(Boolean);
+        const go = parts.length >= 3 ? parts[2] : String(info.goVersion || '');
+        setBuildInfo({ go, builtAt: String(info.builtAt || '').split('T')[0] });
+      })
+      .catch(() => { /* footer falls back to SPL / 2.0 */ });
+    return () => { active = false; };
+  }, []);
 
-  const lineCount = useMemo(() => source.split('\n').length, [source]);
+  // Crop the shared Go PNG to the plot; exported PNGs retain their axes.
+  useEffect(() => {
+    const target = canvas.current;
+    const meta = result?.displayMeta;
+    if (!target || !urls.png || !meta) return;
+    let active = true;
+    const image = new Image();
+    image.onload = () => {
+      if (!active) return;
+      target.width = meta.plotW; target.height = meta.plotH;
+      target.getContext('2d')?.drawImage(image, meta.originX, meta.originY, meta.plotW, meta.plotH, 0, 0, meta.plotW, meta.plotH);
+    };
+    image.src = urls.png;
+    return () => { active = false; };
+  }, [urls.png, result?.displayMeta]);
 
-  function onEdit(v: string) {
-    setSource(v);
-    setRevision((r) => r + 1);
-    setExampleId('custom');
+  function replaceUrls(next: { wav: string; png: string }) {
+    const previous = urlsRef.current;
+    for (const key of ['wav', 'png'] as const) if (previous[key] && previous[key] !== next[key]) URL.revokeObjectURL(previous[key]);
+    urlsRef.current = next; setUrls(next);
   }
+  const blobURL = (buffer: ArrayBuffer, type: string) => URL.createObjectURL(new Blob([buffer], { type }));
 
-  function syncScroll() {
-    if (editorRef.current && gutterRef.current) {
-      gutterRef.current.scrollTop = editorRef.current.scrollTop;
-    }
-  }
-
-  function jumpToLine(line: number) {
-    const ta = editorRef.current;
-    if (!ta) return;
-    const lines = source.split('\n');
-    let off = 0;
-    for (let i = 0; i < Math.min(line - 1, lines.length); i++) off += lines[i].length + 1;
-    ta.focus();
-    ta.setSelectionRange(off, off + (lines[line - 1]?.length ?? 0));
-  }
-
-  function releaseUrls() {
-    if (wavUrl) { URL.revokeObjectURL(wavUrl); setWavUrl(null); }
-    if (pngUrl) { URL.revokeObjectURL(pngUrl); setPngUrl(null); }
-  }
-
-  async function handleRender() {
-    const client = clientRef.current;
-    if (!client || rendering) return;
-    const myReq = ++reqIdRef.current;
-    setRendering(true);
-    setProgress(null);
-    setDiags([]);
-    setWarnings([]);
-    setStatus('rendering…');
-    setWorkerError(null);
+  async function render() {
+    if (!client.current || busy || !ready) return;
+    const id = ++request.current;
+    setBusy('render'); setError(''); setDiagnostics([]); setProgress(0); setStatus('Rendering');
     try {
-      const res = await client.render(source, opts, revision, (done, total) => {
-        if (myReq !== reqIdRef.current) return;
-        setProgress({ done, total });
+      const response = await client.current.render(source, opts, revision, (done, total) => {
+        if (id === request.current) setProgress(total ? Math.min(100, done / total * 100) : 0);
       });
-      if (myReq !== reqIdRef.current) return; // stale
-      if (!res.ok) {
-        setDiags(res.diagnostics ?? [{ code: 'RENDER_ERROR', message: 'render failed', line: 0 }]);
-        setStatus('render failed');
-        return;
-      }
-      const r = res.result!;
-      setStats(r.stats);
-      setWarnings(r.warnings ?? []);
-      setResultRevision(res.revision ?? revision);
-      releaseUrls();
-      if (r.wav) {
-        const blob = new Blob([r.wav as ArrayBuffer], { type: 'audio/wav' });
-        setWavUrl(URL.createObjectURL(blob));
-      }
-      if (r.png) {
-        const blob = new Blob([r.png as ArrayBuffer], { type: 'image/png' });
-        setPngUrl(URL.createObjectURL(blob));
-      }
-      if (r.display && r.displayMeta) {
-        setDisplayData(new Float32Array(r.display.slice(0)));
-        setDisplayMeta(r.displayMeta);
-      } else {
-        setDisplayData(null);
-        setDisplayMeta(null);
-      }
-      if (r.pcm && audioRef.current) {
-        const note = await audioRef.current.setData(r.pcm.slice(0), r.stats.rate);
-        setPlaybackNote(note.message ?? null);
-        setPos(0);
-        setPlaying(false);
-      }
-      setStatus('render complete');
-    } catch (e: any) {
-      if (myReq !== reqIdRef.current) return;
-      setWorkerError(e?.message ?? String(e));
-      setStatus('render failed');
-    } finally {
-      if (myReq === reqIdRef.current) {
-        setRendering(false);
-        setProgress(null);
-      }
-    }
+      if (id !== request.current) return;
+      if (!response.ok || !response.result) { setDiagnostics(response.diagnostics ?? []); setStatus('Render failed'); return; }
+      const next = response.result;
+      audio.current?.stop(); loadedPCM.current = null; setPlaying(false); setPosition(0);
+      setResult(next); setResultRevision(response.revision); setCacheAvailable(true);
+      replaceUrls({ wav: next.wav ? blobURL(next.wav, 'audio/wav') : '', png: next.png ? blobURL(next.png, 'image/png') : '' });
+      setStatus('Render complete');
+    } catch (e) { if (id === request.current) { setError(String(e)); setStatus('Render failed'); } }
+    finally { if (id === request.current) setBusy(null); }
   }
 
-  async function handleCancel() {
-    const client = clientRef.current;
-    if (!client) return;
-    reqIdRef.current++; // discard stale responses
-    setStatus('cancelling…');
+  async function cancel() {
+    ++request.current; setReady(false); setStatus('Cancelling'); setCacheAvailable(false);
+    try { await client.current?.cancelAndRecreate(); setReady(true); setStatus('Cancelled'); }
+    catch (e) { setError(String(e)); setStatus('Worker failed'); }
+    finally { setBusy(null); }
+  }
+
+  async function apply() {
+    if (!client.current || busy || !cacheAvailable) return;
+    const id = ++request.current;
+    setBusy('analysis'); setError(''); setDiagnostics([]); setStatus('Analyzing');
     try {
-      await client.cancelAndRecreate();
-      setStatus('cancelled; worker ready');
-    } catch (e: any) {
-      setWorkerError('cancel failed: ' + (e?.message ?? e));
-      setStatus('worker failed');
-    } finally {
-      setRendering(false);
-      setProgress(null);
-    }
-  }
-
-  async function handleApplySpec() {
-    const client = clientRef.current;
-    if (!client || !stats) return;
-    setApplyingSpec(true);
-    try {
-      const res = await client.spectrogram(opts);
-      if (!res.ok) {
-        setDiags(res.diagnostics ?? [{ code: 'RENDER_ERROR', message: 'spectrogram failed', line: 0 }]);
-        return;
-      }
-      if (pngUrl) URL.revokeObjectURL(pngUrl);
-      if (res.png) {
-        const blob = new Blob([res.png as ArrayBuffer], { type: 'image/png' });
-        setPngUrl(URL.createObjectURL(blob));
-      }
-      if (res.display && res.displayMeta) {
-        setDisplayData(new Float32Array((res.display as ArrayBuffer).slice(0)));
-        setDisplayMeta(res.displayMeta);
-      }
-      setStatus('spectrogram updated (audio not rerendered)');
-    } catch (e: any) {
-      setWorkerError(e?.message ?? String(e));
-    } finally {
-      setApplyingSpec(false);
-    }
-  }
-
-  function onSpecHover(e: React.MouseEvent<HTMLImageElement>) {
-    const img = imgRef.current;
-    if (!img || !displayMeta || !displayData) return;
-    const rect = img.getBoundingClientRect();
-    const scaleX = img.naturalWidth / rect.width;
-    const scaleY = img.naturalHeight / rect.height;
-    const px = Math.floor((e.clientX - rect.left) * scaleX);
-    const py = Math.floor((e.clientY - rect.top) * scaleY);
-    const lx = px - displayMeta.originX;
-    const ly = py - displayMeta.originY;
-    if (lx < 0 || lx >= displayMeta.plotW || ly < 0 || ly >= displayMeta.plotH) {
-      setCursor('outside plot area');
-      return;
-    }
-    const t = ((lx + 0.5) / displayMeta.plotW) * displayMeta.duration;
-    const f = (1 - (ly + 0.5) / displayMeta.plotH) * displayMeta.nyquist;
-    const db = displayData[ly * displayMeta.plotW + lx];
-    setCursor(`t=${t.toFixed(3)} s  f=${fmtFreq(f)}  ${db.toFixed(1)} dBFS`);
+      const response = await client.current.spectrogram(opts);
+      if (id !== request.current) return;
+      if (!response.ok) { setDiagnostics(response.diagnostics ?? []); setStatus('Analysis failed'); return; }
+      if (response.png) replaceUrls({ ...urlsRef.current, png: blobURL(response.png, 'image/png') });
+      setResult(previous => previous ? { ...previous, display: response.display ?? null, displayMeta: response.displayMeta ?? null } : previous);
+      setStatus('Spectrogram updated');
+    } catch (e) { if (id === request.current) setError(String(e)); }
+    finally { if (id === request.current) setBusy(null); }
   }
 
   async function togglePlay() {
-    const eng = audioRef.current;
-    if (!eng || !stats) return;
-    if (playing) {
-      eng.pause();
-      setPlaying(false);
-      setPos(eng.position);
+    const engine = audio.current;
+    if (!engine || !result?.pcm) return;
+    try {
+      if (playing) { engine.pause(); setPlaying(false); return; }
+      if (loadedPCM.current !== result.pcm) {
+        const note = await engine.setData(result.pcm, result.stats.rate);
+        loadedPCM.current = result.pcm;
+        engine.setVolume(volume);
+        if (note.message) setError(note.message);
+      }
+      await engine.play(position); setPlaying(true);
+    } catch (e) { setError(`Playback failed: ${String(e)}`); }
+  }
+
+  function seek(value: number) { audio.current?.seek(value); setPosition(value); }
+  function jump(line: number) {
+    const lines = source.split('\n'); const start = lines.slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0);
+    editor.current?.focus(); editor.current?.setSelectionRange(start, start + (lines[line - 1]?.length ?? 0));
+  }
+  function selectExample(index: number) { const ex = EXAMPLES[index]; if (!ex) return; setSource(ex.source); setExample(ex.id); setRevision(r => r + 1); }
+  function selectUserSound(id: string) { const s = sounds.find(x => x.id === id); if (!s) return; setSource(s.source); setExample(s.id); setRevision(r => r + 1); }
+  function storeSounds(next: UserSound[]) {
+    setSounds(next);
+    if (!persistSounds(next)) setError('Could not save to local storage (quota exceeded?).');
+  }
+  function nextSoundName(base: string): string {
+    const taken = new Set(sounds.map(s => s.name));
+    if (!taken.has(base)) return base;
+    for (let i = 2; ; i++) { const name = `${base} ${i}`; if (!taken.has(name)) return name; }
+  }
+  function libraryFull(): boolean {
+    if (sounds.length < MAX_SOUNDS) return false;
+    setError(`Sound library is full (${MAX_SOUNDS} sounds). Remove one first.`);
+    return true;
+  }
+  function newSound() {
+    if (libraryFull()) return;
+    const s: UserSound = { id: uid(), name: nextSoundName('New sound'), source: '', updatedAt: Date.now() };
+    storeSounds([...sounds, s]);
+    setSource(''); setExample(s.id); setRevision(r => r + 1); editor.current?.focus();
+  }
+  function removeSound(id: string) {
+    storeSounds(sounds.filter(s => s.id !== id));
+    if (example === id) { setExample('custom'); setRevision(r => r + 1); } // keep editor text as an unsaved draft
+  }
+  function updateSource(value: string) {
+    setSource(value);
+    setRevision(r => r + 1);
+    if (sounds.some(s => s.id === example)) {
+      storeSounds(sounds.map(s => s.id === example ? { ...s, source: value, updatedAt: Date.now() } : s));
     } else {
-      await eng.play(pos >= eng.duration - 1e-3 ? 0 : pos);
-      setPlaying(true);
+      setExample('custom');
     }
   }
-
-  function downloadSpl() {
-    const blob = new Blob([source], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'sound.spl';
-    a.click();
+  function startRename() { renameDone.current = false; setDraftName(soundTitle); setRenaming(true); }
+  function finishRename(cancelled: boolean) {
+    if (renameDone.current) return; // blur fires again when Enter/Escape unmounts the input
+    renameDone.current = true;
+    setRenaming(false);
+    if (cancelled) return;
+    const name = draftName.trim().slice(0, 80);
+    if (!name) return;
+    const current = sounds.find(s => s.id === example);
+    if (current) {
+      if (current.name !== name) storeSounds(sounds.map(s => s.id === current.id ? { ...s, name, updatedAt: Date.now() } : s));
+    } else if (!libraryFull()) {
+      // Renaming a built-in example or an unsaved draft forks it into a saved user sound.
+      const s: UserSound = { id: uid(), name, source, updatedAt: Date.now() };
+      storeSounds([...sounds, s]);
+      setExample(s.id);
+    }
+  }
+  function downloadSource() {
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/plain' }));
+    const link = document.createElement('a'); link.href = url; link.download = `${safeFileStem(soundTitle)}.spl`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  function onDragEnter(e: React.DragEvent) {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    dragCount.current++;
+    setDragging(true);
+  }
+  function onDragOver(e: React.DragEvent) {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+  function onDragLeave(e: React.DragEvent) {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    dragCount.current = Math.max(0, dragCount.current - 1);
+    if (dragCount.current === 0) setDragging(false);
+  }
+  async function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    dragCount.current = 0; setDragging(false);
+    const files = [...(e.dataTransfer.files ?? [])];
+    const file = files.find(f => f.name.toLowerCase().endsWith('.spl'));
+    if (!file) {
+      if (files.length) setError('Only .spl files can be dropped onto the source editor.');
+      return;
+    }
+    if (file.size > MAX_DROP_BYTES) { setError(`"${file.name}" exceeds the 1 MB source limit.`); return; }
+    if (libraryFull()) return;
+    try {
+      const text = await file.text();
+      const s: UserSound = { id: uid(), name: nextSoundName(safeFileStem(file.name.replace(/\.spl$/i, ''))), source: text, updatedAt: Date.now() };
+      storeSounds([...sounds, s]);
+      setSource(text); setExample(s.id); setRevision(r => r + 1);
+    } catch { setError(`Could not read "${file.name}".`); }
+  }
+  function inspect(e: React.MouseEvent<HTMLCanvasElement>, meta: DisplayMeta) {
+    const bounds = e.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(meta.plotW - 1, Math.floor((e.clientX - bounds.left) / bounds.width * meta.plotW)));
+    const y = Math.max(0, Math.min(meta.plotH - 1, Math.floor((e.clientY - bounds.top) / bounds.height * meta.plotH)));
+    const db = result?.display ? new DataView(result.display).getFloat32((y * meta.plotW + x) * 4, true) : 0;
+    setCursor(`${((x + 0.5) / meta.plotW * meta.duration).toFixed(2)} s · ${((1 - (y + 0.5) / meta.plotH) * meta.nyquist / 1000).toFixed(2)} kHz · ${db.toFixed(1)} dBFS`);
+  }
+  const duration = result ? result.stats.samples / result.stats.rate : 0;
+  const meta = result?.displayMeta;
+  const stale = result && revision !== resultRevision;
+  const selectedUserSound = sounds.find(s => s.id === example) ?? null;
+  const soundTitle = selectedUserSound ? selectedUserSound.name : example === 'custom' ? 'Untitled sound' : LABELS[EXAMPLES.findIndex(x => x.id === example)];
+  const footerVersion = (buildInfo.go || buildInfo.builtAt)
+    ? `SPL / 2.0 / ${buildInfo.go || 'Go ?'} / ${buildInfo.builtAt || '?'}`
+    : 'SPL / 2.0';
 
-  const stale = resultRevision !== null && resultRevision !== revision;
-  const peakWarn = stats && stats.peak > 1;
-  const progressPct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
-  const seekMax = audioRef.current?.duration || stats?.duration || 0;
-
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-violet-50/80 via-background to-background dark:from-violet-950/20 dark:via-background">
-      {/* Header */}
-      <header className="sticky top-0 z-10 border-b bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-600 to-fuchsia-500 text-white shadow">
-            <AudioWaveform className="size-5" aria-hidden="true" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <h1 className="truncate text-lg font-bold leading-tight tracking-tight">SPL</h1>
-            <p className="hidden truncate text-xs text-muted-foreground sm:block">
-              Spectral shapes for audio · rendered locally in your browser
-            </p>
-          </div>
-          <Badge
-            variant={rendering ? 'default' : 'secondary'}
-            role="status"
-            aria-live="polite"
-            className="gap-1.5"
-          >
-            <span className={cn('size-1.5 rounded-full', rendering ? 'animate-pulse bg-current' : 'bg-emerald-500')} />
-            {status}
-          </Badge>
-          <Button variant="ghost" size="icon" onClick={toggle} aria-label="toggle theme">
-            {dark ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
-          </Button>
-        </div>
-      </header>
-
-      <main className="mx-auto grid max-w-7xl gap-4 px-4 py-6 lg:grid-cols-2">
-        {/* Editor column */}
-        <section aria-label="SPL editor" className="flex min-w-0 flex-col gap-4">
-          <Card>
-            <CardHeader className="flex-row items-start justify-between gap-3 space-y-0">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <ListMusic className="size-4 text-primary" aria-hidden="true" />
-                  Source
-                </CardTitle>
-                <CardDescription>Write SPL, pick an example, then render.</CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                <Label htmlFor="example" className="sr-only">Example</Label>
-                <NativeSelect
-                  id="example"
-                  value={exampleId}
-                  className="w-48"
-                  onChange={(e) => {
-                    const ex = EXAMPLES.find((x) => x.id === e.target.value);
-                    if (ex) {
-                      setSource(ex.source);
-                      setExampleId(ex.id);
-                      setRevision((r) => r + 1);
-                    }
-                  }}
-                >
-                  {EXAMPLES.map((x) => (
-                    <option key={x.id} value={x.id}>{x.label}</option>
-                  ))}
-                  {exampleId === 'custom' && <option value="custom">Custom (edited)</option>}
-                </NativeSelect>
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              {/* Keep visible label text for a11y tests via aria-label on the textarea */}
-              <Label htmlFor="spl-source" className="sr-only">SPL source</Label>
-              <div className="overflow-hidden rounded-lg border bg-muted/30 focus-within:ring-2 focus-within:ring-ring">
-                <div className="flex max-h-[420px]">
-                  <div
-                    ref={gutterRef}
-                    aria-hidden="true"
-                    className="spl-gutter select-none overflow-hidden px-3 py-3 text-right text-muted-foreground"
-                  >
-                    {Array.from({ length: lineCount }, (_, i) => (
-                      <div key={i + 1} className="h-5">{i + 1}</div>
-                    ))}
-                  </div>
-                  <Separator orientation="vertical" />
-                  <textarea
-                    ref={editorRef}
-                    id="spl-source"
-                    aria-label="SPL source"
-                    value={source}
-                    spellCheck={false}
-                    onChange={(e) => onEdit(e.target.value)}
-                    onScroll={syncScroll}
-                    onKeyDown={(e) => {
-                      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') void handleRender();
-                    }}
-                    rows={22}
-                    className="spl-editor min-h-[400px] flex-1 resize-y bg-transparent px-3 py-3 outline-none placeholder:text-muted-foreground"
-                  />
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={handleRender} disabled={rendering} size="lg" className="gap-2">
-                  {rendering ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Sparkles aria-hidden="true" />}
-                  Render
-                </Button>
-                {rendering && (
-                  <Button variant="outline" onClick={handleCancel} className="gap-2">
-                    <X aria-hidden="true" /> Cancel
-                  </Button>
-                )}
-                <span className="text-xs text-muted-foreground">Ctrl+Enter to render</span>
-              </div>
-
-              {rendering && progress && progress.total > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  <Progress value={progressPct} aria-label="render progress" />
-                  <p className="text-xs text-muted-foreground">{progressPct}% · block render in worker</p>
-                </div>
-              )}
-
-              {stale && (
-                <Alert variant="warning" role="status">
-                  <TriangleAlert aria-hidden="true" />
-                  <AlertDescription>Displayed results belong to an earlier editor revision.</AlertDescription>
-                </Alert>
-              )}
-              {workerError && (
-                <Alert variant="destructive">
-                  <CircleAlert aria-hidden="true" />
-                  <AlertTitle>Worker error</AlertTitle>
-                  <AlertDescription>{workerError}</AlertDescription>
-                </Alert>
-              )}
-              {diags.length > 0 && (
-                <Alert variant="destructive" aria-label="diagnostics">
-                  <CircleAlert aria-hidden="true" />
-                  <AlertTitle>Diagnostics</AlertTitle>
-                  <AlertDescription>
-                    <ul className="flex flex-col gap-1">
-                      {diags.map((d, i) => (
-                        <li key={i} className="leading-relaxed">
-                          {d.line > 0 ? (
-                            <Button
-                              variant="link"
-                              size="sm"
-                              className="h-auto p-0 text-inherit underline"
-                              onClick={() => jumpToLine(d.line)}
-                            >
-                              line {d.line}
-                            </Button>
-                          ) : (
-                            <span>global</span>
-                          )}
-                          {': '}{d.code}: {d.message}
-                        </li>
-                      ))}
-                    </ul>
-                  </AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
+  return <div className="studio">
+    <main className="main">
+      <header className="topbar"><div><span className="eyebrow">WORKSPACE</span><h1>{renaming ? <input className="title-input" aria-label="Sound name" value={draftName} autoFocus maxLength={80} onFocus={e => e.currentTarget.select()} onChange={e => setDraftName(e.target.value)} onBlur={() => finishRename(false)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); finishRename(false); } else if (e.key === 'Escape') { e.preventDefault(); finishRename(true); } }} /> : <button className="title-button" onClick={startRename} title="Click to rename" aria-label={`Rename sound ${soundTitle}`}><span>{soundTitle}</span><Pencil size={17} className="title-pencil" /></button>}</h1></div><div className="status" role="status" aria-live="polite"><span className={`status-dot ${busy ? 'working' : ''}`} />{status}</div></header>
+      <div className="workbench">
+        <section className={`source-panel${dragging ? ' drag-over' : ''}`} aria-label="SPL editor" onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e => { void onDrop(e); }}>
+          {dragging && <div className="drop-hint"><Download size={20} /> Drop .spl file to load</div>}
+          <div className="panel-heading"><span><FileCode2 size={19} /> Source</span><span className="file-label" title={`${safeFileStem(soundTitle)}.spl`}>{safeFileStem(soundTitle)}.spl</span></div>
+          <div className="editor-wrap"><div ref={gutter} className="line-numbers" aria-hidden="true">{source.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}</div><textarea ref={editor} aria-label="SPL source" spellCheck={false} value={source} onChange={e => updateSource(e.target.value)} onScroll={() => { if (gutter.current && editor.current) gutter.current.scrollTop = editor.current.scrollTop; }} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void render(); } }} /></div>
+          <div className="editor-actions"><span>{source === '' ? 'Empty' : `${source.split('\n').length} lines`}</span><div className="editor-buttons"><button className="action-button" onClick={downloadSource} title="Download sound.spl"><Download size={16} /> Save source</button>{busy ? <button className="action-button" onClick={cancel}><X size={17} /> Cancel</button> : <button className="action-button primary" disabled={!ready} onClick={render}><Play size={16} fill="currentColor" /> Render</button>}</div></div>
+          {busy && <div className="render-progress" role="progressbar" aria-label="render progress" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div>}
         </section>
 
-        {/* Results column */}
-        <section aria-label="results" className="flex min-w-0 flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Activity className="size-4 text-primary" aria-hidden="true" />
-                Results
-              </CardTitle>
-              <CardDescription>Stats, playback, spectrogram, and downloads.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              {stats ? (
-                <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <dt className="flex items-center gap-1 text-xs text-muted-foreground"><Gauge className="size-3" aria-hidden="true" />Sample rate</dt>
-                    <dd className="mt-0.5 text-sm font-semibold">{stats.rate} Hz</dd>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <dt className="flex items-center gap-1 text-xs text-muted-foreground"><Clock className="size-3" aria-hidden="true" />Duration</dt>
-                    <dd className="mt-0.5 text-sm font-semibold">{stats.duration.toFixed(4)} s</dd>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <dt className="flex items-center gap-1 text-xs text-muted-foreground"><Hash className="size-3" aria-hidden="true" />Samples</dt>
-                    <dd className="mt-0.5 text-sm font-semibold">{stats.samples}</dd>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <dt className="flex items-center gap-1 text-xs text-muted-foreground"><Activity className="size-3" aria-hidden="true" />Peak</dt>
-                    <dd className="mt-0.5 text-sm font-semibold">
-                      {stats.peak.toFixed(4)}
-                      {peakWarn ? <span className="text-destructive"> · over full scale</span> : ''}
-                    </dd>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <dt className="flex items-center gap-1 text-xs text-muted-foreground"><TriangleAlert className="size-3" aria-hidden="true" />Over count</dt>
-                    <dd className="mt-0.5 text-sm font-semibold">{stats.overCount}</dd>
-                  </div>
-                  <div className="rounded-lg border bg-muted/30 p-3">
-                    <dt className="flex items-center gap-1 text-xs text-muted-foreground"><Timer className="size-3" aria-hidden="true" />Render time</dt>
-                    <dd className="mt-0.5 text-sm font-semibold">{stats.elapsedMs} ms</dd>
-                  </div>
-                </dl>
-              ) : (
-                <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed p-8 text-center">
-                  <AudioWaveform className="size-8 text-muted-foreground" aria-hidden="true" />
-                  <p className="text-sm text-muted-foreground">No render yet. Press Render to synthesize audio.</p>
-                </div>
-              )}
-              <p className="text-xs text-muted-foreground">Exports keep the source sample rate; hardware playback may resample.</p>
-              {warnings.map((w, i) => (
-                <Alert key={i} variant="warning" role="status">
-                  <TriangleAlert aria-hidden="true" />
-                  <AlertDescription>{w.code}: {w.message}</AlertDescription>
-                </Alert>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Play className="size-4 text-primary" aria-hidden="true" />
-                Playback
-              </CardTitle>
-              <CardDescription>Browser audio only · volume is playback-only.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={togglePlay} disabled={!stats} className="gap-2">
-                  {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-                  {playing ? 'Pause' : 'Play'}
-                </Button>
-                <Button variant="outline" disabled={!stats} onClick={() => { audioRef.current?.stop(); setPlaying(false); setPos(0); }} className="gap-2">
-                  <Square aria-hidden="true" /> Stop
-                </Button>
-                <Button variant="outline" disabled={!stats} onClick={() => { audioRef.current?.seek(0); void audioRef.current?.play(0); setPlaying(true); }} className="gap-2">
-                  <RotateCcw aria-hidden="true" /> Replay
-                </Button>
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2" role="group" aria-label="playback volume">
-                <div className="flex flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <Label>Volume</Label>
-                    <span className="font-mono text-xs text-muted-foreground">{volume.toFixed(2)}</span>
-                  </div>
-                  <Slider
-                    value={[volume]}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    disabled={!stats}
-                    onValueChange={([v]) => setVolume(v)}
-                    aria-label="playback volume"
-                  />
-                </div>
-                <div className="flex flex-col gap-2" role="group" aria-label="seek seconds">
-                  <div className="flex items-center justify-between">
-                    <Label>Seek</Label>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {pos.toFixed(2)} / {seekMax.toFixed(2)} s
-                    </span>
-                  </div>
-                  <Slider
-                    value={[Math.min(pos, seekMax)]}
-                    min={0}
-                    max={Math.max(seekMax, 0.001)}
-                    step={0.01}
-                    disabled={!stats}
-                    onValueChange={([v]) => { audioRef.current?.seek(v); setPos(v); }}
-                    aria-label="seek seconds"
-                  />
-                </div>
-              </div>
-              {playbackNote && (
-                <Alert variant="warning" role="status">
-                  <TriangleAlert aria-hidden="true" />
-                  <AlertDescription>{playbackNote}</AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <SlidersHorizontal className="size-4 text-primary" aria-hidden="true" />
-                Spectrogram
-              </CardTitle>
-              <CardDescription>dBFS amplitude · linear frequency · hover for readout.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="fft">FFT</Label>
-                  <NativeSelect
-                    id="fft"
-                    value={String(opts.fftLen)}
-                    onChange={(e) => setOpts({ ...opts, fftLen: parseInt(e.target.value, 10) })}
-                  >
-                    {[256, 512, 1024, 2048, 4096, 8192].map((v) => <option key={v} value={v}>{v}</option>)}
-                  </NativeSelect>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="hop">Hop</Label>
-                  <Input
-                    id="hop"
-                    type="number"
-                    min={1}
-                    max={8192}
-                    value={opts.hop}
-                    onChange={(e) => setOpts({ ...opts, hop: parseInt(e.target.value || '256', 10) })}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="dbmin">dB min</Label>
-                  <Input
-                    id="dbmin"
-                    type="number"
-                    step={1}
-                    value={opts.dbMin}
-                    onChange={(e) => setOpts({ ...opts, dbMin: parseFloat(e.target.value) })}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="dbmax">dB max</Label>
-                  <Input
-                    id="dbmax"
-                    type="number"
-                    step={1}
-                    value={opts.dbMax}
-                    onChange={(e) => setOpts({ ...opts, dbMax: parseFloat(e.target.value) })}
-                  />
-                </div>
-              </div>
-              <div>
-                <Button variant="secondary" onClick={handleApplySpec} disabled={!stats || applyingSpec} className="gap-2">
-                  {applyingSpec && <Loader2 className="animate-spin" aria-hidden="true" />}
-                  {applyingSpec ? 'Applying…' : 'Apply (no audio rerender)'}
-                </Button>
-              </div>
-              {pngUrl ? (
-                <>
-                  <img
-                    ref={imgRef}
-                    src={pngUrl}
-                    alt="spectrogram with time, frequency, and dBFS legend"
-                    className="w-full cursor-crosshair rounded-lg border"
-                    onMouseMove={onSpecHover}
-                  />
-                  <Badge variant="secondary" role="status" aria-live="polite" className="w-fit font-mono font-normal">
-                    {cursor}
-                  </Badge>
-                  {displayMeta && (
-                    <p className="text-xs text-muted-foreground">
-                      Analysis: {displayMeta.fftLen}-pt Hann, hop {displayMeta.hop}, {displayMeta.frames} frames × {displayMeta.bins} bins.
-                      Display max-hold to {displayMeta.plotW}×{displayMeta.plotH}; STFT resolution unchanged.
-                    </p>
-                  )}
-                </>
-              ) : (
-                <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed p-8 text-center">
-                  <FileImage className="size-8 text-muted-foreground" aria-hidden="true" />
-                  <p className="text-sm text-muted-foreground">No spectrogram yet.</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Download className="size-4 text-primary" aria-hidden="true" />
-                Downloads
-              </CardTitle>
-              <CardDescription>Shared Go exporters · identical to the CLI.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              {wavUrl && (
-                <Button asChild variant="outline" className="gap-2">
-                  <a href={wavUrl} download="spl.wav"><FileAudio aria-hidden="true" /> WAV (float32)</a>
-                </Button>
-              )}
-              {pngUrl && (
-                <Button asChild variant="outline" className="gap-2">
-                  <a href={pngUrl} download="spectrogram.png"><FileImage aria-hidden="true" /> Spectrogram PNG</a>
-                </Button>
-              )}
-              <Button variant="outline" onClick={downloadSpl} className="gap-2">
-                <FileText aria-hidden="true" /> SPL source
-              </Button>
-            </CardContent>
-          </Card>
+        <section className="viewer-panel" aria-label="Spectrogram player">
+          <div className="panel-heading"><span><AudioWaveform size={20} /> Spectrogram {stale && <span className="stale" title="Displayed results belong to an earlier editor revision.">Edited</span>}</span><button className={`icon-button ${settings ? 'active' : ''}`} aria-label="Analysis settings" aria-expanded={settings} onClick={() => setSettings(!settings)}><SlidersHorizontal size={19} /></button></div>
+          {settings && <div className="analysis-settings"><label>FFT<select value={opts.fftLen} onChange={e => setOpts({ ...opts, fftLen: +e.target.value })}>{[256, 512, 1024, 2048, 4096, 8192].map(v => <option key={v}>{v}</option>)}</select></label><label>Hop<input type="number" min="1" max="8192" value={opts.hop} onChange={e => setOpts({ ...opts, hop: +e.target.value })} /></label><label>dB min<input type="number" value={opts.dbMin} onChange={e => setOpts({ ...opts, dbMin: +e.target.value })} /></label><label>dB max<input type="number" value={opts.dbMax} onChange={e => setOpts({ ...opts, dbMax: +e.target.value })} /></label><button className="action-button" disabled={!cacheAvailable || !!busy} onClick={apply}>{busy === 'analysis' ? <Loader2 className="spin" size={16} /> : 'Apply'}</button></div>}
+          <div className="visualizer">
+            <div className="frequency-axis">{[1, 0.75, 0.5, 0.25, 0].map(v => <span key={v}>{((meta?.nyquist ?? 12000) * v / 1000).toFixed(1)}k</span>)}</div>
+            <div className="plot">
+              <canvas ref={canvas} aria-label="spectrogram with time and frequency axes" onMouseMove={e => { if (meta) inspect(e, meta); }} onMouseLeave={() => setCursor('')} onClick={e => { if (duration) { const rect = e.currentTarget.getBoundingClientRect(); seek(Math.max(0, Math.min(duration, (e.clientX - rect.left) / rect.width * duration))); } }} />
+              {!result && <div className="empty-plot"><AudioWaveform size={38} strokeWidth={1} /><span>No audio rendered</span></div>}
+              {result && <div className="playhead" style={{ left: `${Math.min(100, duration ? position / duration * 100 : 0)}%` }}><span /></div>}
+            </div>
+            <div className="time-axis">{[0, 0.25, 0.5, 0.75, 1].map(v => <span key={v}>{(duration * v).toFixed(2)} s</span>)}</div>
+          </div>
+          <div className="plot-caption"><span>{cursor || (meta ? `${meta.fftLen} FFT / ${meta.hop} HOP` : 'SPECTRAL VIEW')}</span><span className="color-key"><span />{meta?.dbMin ?? -100} → {meta?.dbMax ?? 0} dBFS</span></div>
+          <div className="transport"><button className="play-button" disabled={!result?.pcm} onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'}>{playing ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" />}</button><button className="icon-button" disabled={!result} aria-label="Stop" onClick={() => { audio.current?.stop(); setPosition(0); setPlaying(false); }}><Square size={16} /></button><span className="time-display">{time(position)} <span>/ {time(duration)}</span></span><div className="volume"><Volume2 size={18} /><input type="range" aria-label="playback volume" min="0" max="1" step="0.01" value={volume} onChange={e => { const v = +e.target.value; setVolume(v); audio.current?.setVolume(v); }} /></div></div>
+          <input className="seek" type="range" aria-label="seek seconds" min="0" max={duration || 1} step="0.001" disabled={!result} value={Math.min(position, duration)} onChange={e => seek(+e.target.value)} />
+          <div className="viewer-footer"><div className="metrics">{result ? <><span aria-label="Sample rate">{(result.stats.rate / 1000).toFixed(1)} <small>kHz</small></span><span>MONO</span><span className={result.stats.peak > 1 ? 'hot' : ''}>{result.stats.peak.toFixed(3)} <small>peak</small></span></> : <span>MONO / FLOAT32</span>}</div><div className="exports">{urls.wav && <a href={urls.wav} download="sound.wav"><Download size={15} /> WAV</a>}{urls.png && <a href={urls.png} download="spectrogram.png"><Download size={15} /> PNG</a>}</div></div>
         </section>
-      </main>
-
-      <footer className="mx-auto max-w-7xl px-4 pb-8">
-        <Separator className="mb-3" />
-        <p className="text-xs text-muted-foreground">
-          All synthesis runs locally — the Go engine compiled to WebAssembly. No uploads, no servers.
-        </p>
-      </footer>
-    </div>
-  );
+      </div>
+      <section className="library-bar" aria-label="Sound library">
+        <a className="brand" href="./" aria-label="SPL home"><span className="brand-icon"><AudioWaveform size={20} /></span><strong>SPL<span>studio</span></strong></a>
+        <span className="library-label">Library:</span>
+        <nav className="library-chips" aria-label="Examples">{EXAMPLES.map((ex, index) => <button key={ex.id} className={`chip ${example === ex.id ? 'selected' : ''}`} onClick={() => selectExample(index)} aria-current={example === ex.id ? 'true' : undefined}><span className={`example-dot dot-${index}`} /><span>{LABELS[index]}</span></button>)}{sounds.map((s, i) => <span key={s.id} className={`chip chip-user${example === s.id ? ' selected' : ''}`}><button className="chip-main" onClick={() => selectUserSound(s.id)} aria-current={example === s.id ? 'true' : undefined}><span className={`example-dot dot-${(EXAMPLES.length + i) % 5}`} /><span>{s.name}</span></button><button className="chip-remove" onClick={() => removeSound(s.id)} aria-label={`Remove ${s.name}`} title={`Remove ${s.name}`}><X size={14} /></button></span>)}</nav>
+        <button className="new-button" onClick={newSound} aria-label="Create new sound" title="New sound"><Plus size={19} /></button>
+      </section>
+      {(error || diagnostics.length > 0 || (result?.warnings.length ?? 0) > 0) && <section className="diagnostics" role="alert" aria-label="diagnostics">{error && <p>{error}</p>}{diagnostics.map((d, i) => <p key={i}><button onClick={() => jump(d.line)}>{d.line ? `Line ${d.line}` : d.code}</button> {d.code}: {d.message}</p>)}{result?.warnings.map((d, i) => <p key={`warning-${i}`} className="hot">{d.code === 'PEAK_WARNING' ? `${result.stats.overCount} samples exceed full scale. Peak ${result.stats.peak.toFixed(3)}.` : d.message}</p>)}</section>}
+      <footer className="version-footer"><span>{footerVersion}</span></footer>
+    </main>
+  </div>;
 }

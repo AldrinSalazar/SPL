@@ -1,6 +1,6 @@
 # SPL audio compiler and browser application
 
-SPL version 2 describes sound by drawing frequency tracks, harmonic spectra, noise regions, and attacks. This repo implements the normative language in `SPL_Clean_DSL_Specification.md` (preserved unchanged) plus:
+SPL version 2 describes sound by drawing frequency tracks, harmonic spectra, noise regions, and attacks. This repo implements the language normatively defined in `SPL-2-Language-Specification.md` plus:
 
 1. Reusable Go library: parse/validate, deterministic float64 render, spectrogram, WAV/PNG export.
 2. Native Go CLI (`spl`).
@@ -8,11 +8,19 @@ SPL version 2 describes sound by drawing frequency tracks, harmonic spectra, noi
 
 No synthesis server, uploads, or separate JS renderer. All audio work runs locally (native or in-browser WASM).
 
+## Studio interface
+
+The dark workspace has an example library, source editor, and an integrated spectrogram player. Click the plot or use the seek slider to move playback; Play/Pause and Stop sit directly below the plot. Audio initialization happens on Play. Volume affects playback only. WAV and labeled PNG exports are in the viewer footer.
+
+Open **Analysis settings** to change FFT, hop, or display range, then Apply. Settings and rendering are serialized so results stay together. Failed exports preserve the previous successful audio and analysis cache. Cancelling recreates the worker; render again before applying new analysis settings. An **Edited** badge marks results from an earlier source revision.
+
+Regression coverage includes failed WASM initialization, cache preservation after a failed export, playback and plot seeking, mobile layout, exact harmonic spectrum endpoints, comments containing fences, and spectrogram analysis of very large finite signals. Run browser checks with `npm run test:e2e --prefix web` (use `npm.cmd` on Windows if PowerShell blocks the script launcher).
+
 ## Prerequisites and tested versions
 
-- Go `go1.26.1 windows/amd64` (any supported Go ≥1.23 with `GOOS=js GOARCH=wasm` should work; WASM runtime JS is resolved from the exact toolchain via `go env GOROOT`).
+- Go `go1.27.1 windows/amd64` (any supported Go ≥1.23 with `GOOS=js GOARCH=wasm` should work; WASM runtime JS is resolved from the exact toolchain via `go env GOROOT`).
 - Node `v24.13.1`, npm `11.8.0`.
-- Web deps (see `web/package-lock.json`): `react 18.3.1`, `react-dom 18.3.1`, `vite 6.4.3`, `typescript 5.9.3`, `@vitejs/plugin-react 4.7.0`, `tailwindcss 3.4.19`, `lucide-react 1.42.0`, `class-variance-authority 0.7.1`, `clsx`, `tailwind-merge`, `@radix-ui/{slot,label,slider,progress,separator}`, `vitest 2.1.9`, `@playwright/test 1.63.0`. UI primitives in `web/src/components/ui/` follow shadcn/ui conventions.
+- Web deps (see `web/package-lock.json`): `react 18.3.1`, `react-dom 18.3.1`, `vite 6.4.3`, `typescript 5.9.3`, `@vitejs/plugin-react 4.7.0`, `tailwindcss 3.4.19`, `lucide-react 1.42.0`, `vitest 2.1.9`, `@playwright/test 1.63.0`.
 - Go deps (`go.mod`): `golang.org/x/image v0.45.0` (PNG font rendering), plus `x/sys`, `x/text` (indirect).
 
 ## Quick start
@@ -156,7 +164,7 @@ pkg/synth/          deterministic float64 rendering + IFFT noise + hash
 pkg/spectrogram/    STFT/dB/color/PNG + display raster for cursor mapping
 pkg/audio/          float32 WAV encode + independent decoder
 integration/        examples/determinism/CLI/WAV/PNG/over-scale tests
-examples/           5 valid SPL files (4 spec-exact + minimal)
+examples/           5 valid SPL example files
 testdata/           conformance samples
 web/                React/TS/Vite app + worker + e2e tests
 scripts/            reproducible builds
@@ -167,15 +175,14 @@ Key APIs: `spl.Parse`, `spl.Validate`, `synth.Render`, `spectrogram.ComputeSpect
 ## Dependencies and licenses
 
 - Go: `golang.org/x/image` BSD-3 (font `basicfont` for PNG labels). Indirect `x/sys`, `x/text` BSD-3.
-- Web: React/React-DOM MIT, Vite MIT, `@vitejs/plugin-react` MIT, TypeScript Apache-2.0, Tailwind CSS MIT, Radix UI MIT, lucide-react ISC, `class-variance-authority`/`clsx`/`tailwind-merge` MIT/Apache-2.0, Vitest MIT, Playwright Apache-2.0, `@types/*` MIT. See `web/package-lock.json` for full tree.
+- Web: React/React-DOM MIT, Vite MIT, `@vitejs/plugin-react` MIT, TypeScript Apache-2.0, Tailwind CSS MIT, lucide-react ISC, Vitest MIT, Playwright Apache-2.0, `@types/*` MIT. See `web/package-lock.json` for full tree.
 - No audio/network runtime deps; production web bundle is static + `spl.wasm` + `wasm_exec.js` (Go BSD-style, versioned in `web/public/wasm-info.json`).
 
 ## Known limitations
 
 - No integer WAV export (float32 only, by design); no log-frequency spectrogram view.
 - Noise/hit low-frequency resolution limited by specified `L=2048` window (use tracks for narrow lows).
-- Very hot signals (`>~1e300`) may overflow float32 WAV (rejected) or need spectrogram scaling (handled via pre-scaling; caps at +1000 dBFS in pathological cases).
+- Signals beyond float32 range are rejected by WAV export. Spectrogram analysis scales large finite input before the FFT, retaining its original dB reference.
 - Browser Cancel uses termination (no cooperative mid-render progress for tiny renders); progress most visible on multi-second noise/harmonic workloads.
 - Real-time performance not promised; see measured benchmarks for guidance.
 ```
-

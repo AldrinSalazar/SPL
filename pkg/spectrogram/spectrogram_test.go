@@ -10,6 +10,20 @@ import (
 	"spl/pkg/synth"
 )
 
+func TestHugeFiniteSignalRemainsVisible(t *testing.T) {
+	pcm := make([]float64, 4096)
+	for i := range pcm {
+		pcm[i] = 1e308
+	}
+	r, d := ComputeSpectrogram(pcm, 8000, nil, spl.DefaultLimits())
+	if d != nil {
+		t.Fatal(d)
+	}
+	if math.Abs(r.At(8, 0)-6160) > 1e-8 {
+		t.Fatalf("DC = %g dBFS, want 6160", r.At(8, 0))
+	}
+}
+
 func renderPCM(t *testing.T, src string) ([]float64, int) {
 	t.Helper()
 	doc, diags := spl.Parse([]byte(src))
