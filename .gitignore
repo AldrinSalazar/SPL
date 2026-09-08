@@ -1,0 +1,12 @@
+spl.exe
+spl-test.exe
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/public/spl.wasm
+/web/public/wasm_exec.js
+/web/public/wasm-info.json
+/web/tsconfig.tsbuildinfo
+testdata/tmp/
+node_modules/
