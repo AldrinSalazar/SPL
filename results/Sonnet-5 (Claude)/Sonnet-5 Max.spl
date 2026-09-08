@@ -1,0 +1,171 @@
+# ============================================================
+# "Hello, dear human!" rendered as an SPL 2 document.
+#
+# Mapping used throughout:
+#   noise     -> voiceless aspiration (the two "h" sounds)
+#   hit       -> the stop-consonant release burst ("d")
+#   harmonics -> every voiced sound: vowels, the liquid "l",
+#                and the nasals "m"/"n" - all periodic and
+#                formant-bearing, so each needs a pitch curve
+#                plus a harmonic spectrum, not just noise or a
+#                single click.
+#
+# Voice target: calm, warm, mid-range - fundamental roughly
+# 115-165 Hz. Formant numbers are standard adult-speech
+# averages, used here as spectral peak positions.
+#
+# Silence (the comma, the gap between words) needs no special
+# construct - it's just a stretch with no active block. Blocks
+# are active on [t0, t1), so adjacent blocks hand off exactly
+# at a shared boundary time with no gap and no double-count.
+# ============================================================
+
+spl 2 24000 1.6 20260908
+
+# The "h" at the start of "Hello": voiceless glottal aspiration
+noise
+0.000 400 7000 0.000 0.4
+0.030 400 7000 0.070 0.4
+0.060 400 7000 0.000 0.4
+end
+
+# The unstressed "e" in "Hello": short front vowel
+harmonics
+spectrum
+0    0
+530  1.0    # F1
+1100 0.05
+1840 0.5    # F2
+2150 0.08
+2480 0.25   # F3
+3200 0
+curve
+0.060 132 0.00
+0.100 130 0.18
+0.150 130 0.14
+end
+
+# The "ll" in "Hello": liquid consonant - vowel-like, but the
+# lateral channel damps the higher formants
+harmonics
+spectrum
+0    0
+360  0.8    # F1
+800  0.04
+1300 0.4    # F2
+2000 0.03
+2700 0.1    # F3, heavily damped
+3200 0
+curve
+0.150 130 0.14
+0.220 136 0.20
+end
+
+# The stressed "-llo" in "Hello": back-rounded diphthong nucleus
+harmonics
+spectrum
+0    0
+500  0.9    # F1
+700  0.15
+950  0.6    # F2, close to F1 (rounding + backness)
+1600 0.04
+2450 0.15   # F3
+3200 0
+curve
+0.220 136 0.20
+0.320 150 0.30
+0.460 128 0.00
+end
+
+# [comma: 0.460-0.620s is silent - no block is active here]
+
+# The "d" at the start of "dear": alveolar stop release burst
+hit
+0.620 0.040 2500 8000 0.35 0
+end
+
+# The "-ear" in "dear": r-colored vowel
+harmonics
+spectrum
+0    0
+400  0.7    # F1
+950  0.05
+1700 0.5    # F2
+# F3 sits right next to F2 here - that convergence is the
+# acoustic fingerprint of an American "r"
+1900 0.45
+2800 0
+curve
+0.660 116 0.00
+0.820 126 0.24
+0.980 134 0.00
+end
+
+# [word gap: 0.980-1.040s is silent]
+
+# The "h" at the start of "human": voiceless glottal aspiration
+noise
+1.040 400 7000 0.000 0.4
+1.070 400 7000 0.055 0.4
+1.095 400 7000 0.000 0.4
+end
+
+# The "hu-" in "human" (the "y" glide is folded into this
+# onset): high back-rounded vowel
+harmonics
+spectrum
+0    0
+300  0.6    # F1
+580  0.35
+870  0.7    # F2, close to F1 - the "hooty" rounded quality
+1500 0.03
+2250 0.1    # F3
+3000 0
+curve
+1.095 140 0.00
+1.220 165 0.28
+end
+
+# The "m" in "human": bilabial nasal murmur
+harmonics
+spectrum
+0    0
+280  1.0    # dominant low nasal resonance
+900  0.03   # everything higher is heavily damped
+2200 0.02
+3200 0
+curve
+1.220 165 0.28
+1.310 152 0.14
+end
+
+# The unstressed "a" in "human": neutral central schwa
+harmonics
+spectrum
+0    0
+500  0.5    # F1
+950  0.1
+1500 0.35   # F2
+1950 0.08
+2500 0.2    # F3
+3200 0
+curve
+1.310 152 0.14
+1.390 140 0.10
+end
+
+# The final "n" in "human!": alveolar nasal, carrying the
+# exclamation's closing emphasis
+harmonics
+spectrum
+0    0
+300  1.0    # dominant low nasal resonance
+900  0.04
+1500 0.08
+2500 0.02
+3200 0
+curve
+1.390 140 0.10
+1.480 136 0.16
+1.600 130 0.00
+end

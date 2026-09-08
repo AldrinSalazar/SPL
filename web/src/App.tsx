@@ -6,7 +6,6 @@ import { AudioEngine } from './audioEngine';
 import type { Diagnostic, DisplayMeta, RenderOpts, RenderResult } from './types';
 
 const DEFAULTS: RenderOpts = { fftLen: 2048, hop: 256, dbMin: -100, dbMax: 0, plotW: 1000, plotH: 500 };
-const LABELS = ['Pure tone', 'Three notes', 'Two resonances', 'Metallic impact', 'Moving noise'];
 const time = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toFixed(2).padStart(5, '0')}`;
 
 interface UserSound { id: string; name: string; source: string; updatedAt: number; }
@@ -290,7 +289,7 @@ export default function App() {
   const meta = result?.displayMeta;
   const stale = result && revision !== resultRevision;
   const selectedUserSound = sounds.find(s => s.id === example) ?? null;
-  const soundTitle = selectedUserSound ? selectedUserSound.name : example === 'custom' ? 'Untitled sound' : LABELS[EXAMPLES.findIndex(x => x.id === example)];
+  const soundTitle = selectedUserSound ? selectedUserSound.name : example === 'custom' ? 'Untitled sound' : (EXAMPLES.find(x => x.id === example)?.label ?? 'Untitled sound');
   const footerVersion = (buildInfo.go || buildInfo.builtAt)
     ? `SPL / 2.0 / ${buildInfo.go || 'Go ?'} / ${buildInfo.builtAt || '?'}`
     : 'SPL / 2.0';
@@ -328,7 +327,7 @@ export default function App() {
       <section className="library-bar" aria-label="Sound library">
         <a className="brand" href="./" aria-label="SPL home"><span className="brand-icon"><AudioWaveform size={20} /></span><strong>SPL<span>studio</span></strong></a>
         <span className="library-label">Library:</span>
-        <nav className="library-chips" aria-label="Examples">{EXAMPLES.map((ex, index) => <button key={ex.id} className={`chip ${example === ex.id ? 'selected' : ''}`} onClick={() => selectExample(index)} aria-current={example === ex.id ? 'true' : undefined}><span className={`example-dot dot-${index}`} /><span>{LABELS[index]}</span></button>)}{sounds.map((s, i) => <span key={s.id} className={`chip chip-user${example === s.id ? ' selected' : ''}`}><button className="chip-main" onClick={() => selectUserSound(s.id)} aria-current={example === s.id ? 'true' : undefined}><span className={`example-dot dot-${(EXAMPLES.length + i) % 5}`} /><span>{s.name}</span></button><button className="chip-remove" onClick={() => removeSound(s.id)} aria-label={`Remove ${s.name}`} title={`Remove ${s.name}`}><X size={14} /></button></span>)}</nav>
+        <nav className="library-chips" aria-label="Examples">{EXAMPLES.map((ex, index) => <button key={ex.id} className={`chip ${example === ex.id ? 'selected' : ''}`} onClick={() => selectExample(index)} aria-current={example === ex.id ? 'true' : undefined}><span className={`example-dot dot-${index % 5}`} /><span>{ex.label}</span></button>)}{sounds.map((s, i) => <span key={s.id} className={`chip chip-user${example === s.id ? ' selected' : ''}`}><button className="chip-main" onClick={() => selectUserSound(s.id)} aria-current={example === s.id ? 'true' : undefined}><span className={`example-dot dot-${(EXAMPLES.length + i) % 5}`} /><span>{s.name}</span></button><button className="chip-remove" onClick={() => removeSound(s.id)} aria-label={`Remove ${s.name}`} title={`Remove ${s.name}`}><X size={14} /></button></span>)}</nav>
         <button className="new-button" onClick={newSound} aria-label="Create new sound" title="New sound"><Plus size={19} /></button>
       </section>
       {(error || diagnostics.length > 0 || (result?.warnings.length ?? 0) > 0) && <section className="diagnostics" role="alert" aria-label="diagnostics">{error && <p>{error}</p>}{diagnostics.map((d, i) => <p key={i}><button onClick={() => jump(d.line)}>{d.line ? `Line ${d.line}` : d.code}</button> {d.code}: {d.message}</p>)}{result?.warnings.map((d, i) => <p key={`warning-${i}`} className="hot">{d.code === 'PEAK_WARNING' ? `${result.stats.overCount} samples exceed full scale. Peak ${result.stats.peak.toFixed(3)}.` : d.message}</p>)}</section>}

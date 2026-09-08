@@ -10,7 +10,7 @@ No synthesis server, uploads, or separate JS renderer. All audio work runs local
 
 ## Studio interface
 
-The dark workspace has an example library, source editor, and an integrated spectrogram player. Click the plot or use the seek slider to move playback; Play/Pause and Stop sit directly below the plot. Audio initialization happens on Play. Volume affects playback only. WAV and labeled PNG exports are in the viewer footer.
+The dark workspace has an example library, source editor, and an integrated spectrogram player. Click the plot or use the seek slider to move playback; Play/Pause and Stop sit directly below the plot. Audio initialization happens on Play. Volume affects playback only. WAV and labeled PNG exports are in the viewer footer. The library also includes the blog-post voice samples from results/; refresh them with node scripts/update-playground-samples.mjs.
 
 Open **Analysis settings** to change FFT, hop, or display range, then Apply. Settings and rendering are serialized so results stay together. Failed exports preserve the previous successful audio and analysis cache. Cancelling recreates the worker; render again before applying new analysis settings. An **Edited** badge marks results from an earlier source revision.
 
@@ -165,6 +165,7 @@ pkg/spectrogram/    STFT/dB/color/PNG + display raster for cursor mapping
 pkg/audio/          float32 WAV encode + independent decoder
 integration/        examples/determinism/CLI/WAV/PNG/over-scale tests
 examples/           5 valid SPL example files
+results/            blog-post voice samples per model
 testdata/           conformance samples
 web/                React/TS/Vite app + worker + e2e tests
 scripts/            reproducible builds
