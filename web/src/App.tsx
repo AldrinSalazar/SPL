@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { AudioWaveform, Play, Pause, Square, Download, SlidersHorizontal, Volume2, Plus, FileCode2, Loader2, X, Pencil } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AudioWaveform, Play, Pause, Square, Download, SlidersHorizontal, Volume2, Plus, FileCode2, Loader2, X, Pencil, Sparkles } from 'lucide-react';
 import { EXAMPLES } from './examples';
+import { highlightSPL } from './highlight';
 import { WorkerClient } from './workerClient';
 import { AudioEngine } from './audioEngine';
 import type { Diagnostic, DisplayMeta, RenderOpts, RenderResult } from './types';
@@ -53,7 +54,7 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
-  const [volume, setVolume] = useState(0.2);
+  const [volume, setVolume] = useState(1);
   const [cursor, setCursor] = useState('');
   const [cacheAvailable, setCacheAvailable] = useState(false);
   const [buildInfo, setBuildInfo] = useState({ go: '', builtAt: '' });
@@ -67,10 +68,15 @@ export default function App() {
   const audio = useRef<AudioEngine | null>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
   const gutter = useRef<HTMLDivElement>(null);
+  const highlight = useRef<HTMLPreElement>(null);
+  const highlighted = useMemo(() => highlightSPL(source), [source]);
   const canvas = useRef<HTMLCanvasElement>(null);
   const request = useRef(0);
   const loadedPCM = useRef<ArrayBuffer | null>(null);
   const urlsRef = useRef(urls);
+  const volumeRef = useRef(volume);
+  volumeRef.current = volume;
+  const selection = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -118,6 +124,13 @@ export default function App() {
     return () => { active = false; };
   }, [urls.png, result?.displayMeta]);
 
+  // Keep the highlight backdrop aligned when the source swaps programmatically
+  // (scroll events cover typing/scrolling; this covers selection switches).
+  useEffect(() => {
+    const ta = editor.current, pre = highlight.current;
+    if (ta && pre) { pre.scrollTop = ta.scrollTop; pre.scrollLeft = ta.scrollLeft; }
+  });
+
   function replaceUrls(next: { wav: string; png: string }) {
     const previous = urlsRef.current;
     for (const key of ['wav', 'png'] as const) if (previous[key] && previous[key] !== next[key]) URL.revokeObjectURL(previous[key]);
@@ -125,22 +138,52 @@ export default function App() {
   }
   const blobURL = (buffer: ArrayBuffer, type: string) => URL.createObjectURL(new Blob([buffer], { type }));
 
+  function clearResults() {
+    selection.current++;
+    audio.current?.stop();
+    loadedPCM.current = null;
+    setPlaying(false); setPosition(0); setCursor('');
+    setResult(null); setResultRevision(-1); setCacheAvailable(false);
+    replaceUrls({ wav: '', png: '' });
+    const c = canvas.current;
+    if (c) c.getContext('2d')?.clearRect(0, 0, c.width, c.height);
+    if (!busy) { setStatus('Ready'); setError(''); setDiagnostics([]); }
+  }
+
   async function render() {
     if (!client.current || busy || !ready) return;
     const id = ++request.current;
+    const sel = selection.current;
     setBusy('render'); setError(''); setDiagnostics([]); setProgress(0); setStatus('Rendering');
     try {
       const response = await client.current.render(source, opts, revision, (done, total) => {
         if (id === request.current) setProgress(total ? Math.min(100, done / total * 100) : 0);
       });
       if (id !== request.current) return;
+      if (sel !== selection.current) { setStatus('Ready'); return; }
       if (!response.ok || !response.result) { setDiagnostics(response.diagnostics ?? []); setStatus('Render failed'); return; }
       const next = response.result;
       audio.current?.stop(); loadedPCM.current = null; setPlaying(false); setPosition(0);
       setResult(next); setResultRevision(response.revision); setCacheAvailable(true);
       replaceUrls({ wav: next.wav ? blobURL(next.wav, 'audio/wav') : '', png: next.png ? blobURL(next.png, 'image/png') : '' });
       setStatus('Render complete');
-    } catch (e) { if (id === request.current) { setError(String(e)); setStatus('Render failed'); } }
+      // Play the sound once right after rendering finishes.
+      try {
+        const engine = audio.current;
+        if (engine && next.pcm) {
+          const note = await engine.setData(next.pcm, next.stats.rate);
+          if (id !== request.current || sel !== selection.current) return;
+          loadedPCM.current = next.pcm;
+          engine.setVolume(volumeRef.current);
+          if (note.message) setError(note.message);
+          await engine.play(0);
+          if (id !== request.current || sel !== selection.current) { engine.stop(); return; }
+          setPlaying(true); setPosition(0);
+        }
+      } catch (e) {
+        if (id === request.current && sel === selection.current) setError(`Playback failed: ${String(e)}`);
+      }
+    } catch (e) { if (id === request.current && sel === selection.current) { setError(String(e)); setStatus('Render failed'); } }
     finally { if (id === request.current) setBusy(null); }
   }
 
@@ -154,15 +197,17 @@ export default function App() {
   async function apply() {
     if (!client.current || busy || !cacheAvailable) return;
     const id = ++request.current;
+    const sel = selection.current;
     setBusy('analysis'); setError(''); setDiagnostics([]); setStatus('Analyzing');
     try {
       const response = await client.current.spectrogram(opts);
       if (id !== request.current) return;
+      if (sel !== selection.current) { setStatus('Ready'); return; }
       if (!response.ok) { setDiagnostics(response.diagnostics ?? []); setStatus('Analysis failed'); return; }
       if (response.png) replaceUrls({ ...urlsRef.current, png: blobURL(response.png, 'image/png') });
       setResult(previous => previous ? { ...previous, display: response.display ?? null, displayMeta: response.displayMeta ?? null } : previous);
       setStatus('Spectrogram updated');
-    } catch (e) { if (id === request.current) setError(String(e)); }
+    } catch (e) { if (id === request.current && sel === selection.current) setError(String(e)); }
     finally { if (id === request.current) setBusy(null); }
   }
 
@@ -186,8 +231,13 @@ export default function App() {
     const lines = source.split('\n'); const start = lines.slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0);
     editor.current?.focus(); editor.current?.setSelectionRange(start, start + (lines[line - 1]?.length ?? 0));
   }
-  function selectExample(index: number) { const ex = EXAMPLES[index]; if (!ex) return; setSource(ex.source); setExample(ex.id); setRevision(r => r + 1); }
-  function selectUserSound(id: string) { const s = sounds.find(x => x.id === id); if (!s) return; setSource(s.source); setExample(s.id); setRevision(r => r + 1); }
+  function switchEntry(nextSource: string, nextId: string) {
+    if (nextId === example) return;
+    clearResults();
+    setSource(nextSource); setExample(nextId); setRevision(r => r + 1);
+  }
+  function selectExample(index: number) { const ex = EXAMPLES[index]; if (!ex) return; switchEntry(ex.source, ex.id); }
+  function selectUserSound(id: string) { const s = sounds.find(x => x.id === id); if (!s) return; switchEntry(s.source, s.id); }
   function storeSounds(next: UserSound[]) {
     setSounds(next);
     if (!persistSounds(next)) setError('Could not save to local storage (quota exceeded?).');
@@ -206,11 +256,12 @@ export default function App() {
     if (libraryFull()) return;
     const s: UserSound = { id: uid(), name: nextSoundName('New sound'), source: '', updatedAt: Date.now() };
     storeSounds([...sounds, s]);
+    clearResults();
     setSource(''); setExample(s.id); setRevision(r => r + 1); editor.current?.focus();
   }
   function removeSound(id: string) {
     storeSounds(sounds.filter(s => s.id !== id));
-    if (example === id) { setExample('custom'); setRevision(r => r + 1); } // keep editor text as an unsaved draft
+    if (example === id) { clearResults(); setExample('custom'); setRevision(r => r + 1); } // keep editor text as an unsaved draft
   }
   function updateSource(value: string) {
     setSource(value);
@@ -275,6 +326,7 @@ export default function App() {
       const text = await file.text();
       const s: UserSound = { id: uid(), name: nextSoundName(safeFileStem(file.name.replace(/\.spl$/i, ''))), source: text, updatedAt: Date.now() };
       storeSounds([...sounds, s]);
+      clearResults();
       setSource(text); setExample(s.id); setRevision(r => r + 1);
     } catch { setError(`Could not read "${file.name}".`); }
   }
@@ -296,13 +348,13 @@ export default function App() {
 
   return <div className="studio">
     <main className="main">
-      <header className="topbar"><div><span className="eyebrow">WORKSPACE</span><h1>{renaming ? <input className="title-input" aria-label="Sound name" value={draftName} autoFocus maxLength={80} onFocus={e => e.currentTarget.select()} onChange={e => setDraftName(e.target.value)} onBlur={() => finishRename(false)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); finishRename(false); } else if (e.key === 'Escape') { e.preventDefault(); finishRename(true); } }} /> : <button className="title-button" onClick={startRename} title="Click to rename" aria-label={`Rename sound ${soundTitle}`}><span>{soundTitle}</span><Pencil size={17} className="title-pencil" /></button>}</h1></div><div className="status" role="status" aria-live="polite"><span className={`status-dot ${busy ? 'working' : ''}`} />{status}</div></header>
+      <header className="topbar"><div><h1>{renaming ? <input className="title-input" aria-label="Sound name" value={draftName} autoFocus maxLength={80} onFocus={e => e.currentTarget.select()} onChange={e => setDraftName(e.target.value)} onBlur={() => finishRename(false)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); finishRename(false); } else if (e.key === 'Escape') { e.preventDefault(); finishRename(true); } }} /> : <button className="title-button" onClick={startRename} title="Click to rename" aria-label={`Rename sound ${soundTitle}`}><span>{soundTitle}</span><Pencil size={17} className="title-pencil" /></button>}</h1></div><div className="sr-only" role="status" aria-live="polite">{status}</div></header>
       <div className="workbench">
         <section className={`source-panel${dragging ? ' drag-over' : ''}`} aria-label="SPL editor" onDragEnter={onDragEnter} onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={e => { void onDrop(e); }}>
           {dragging && <div className="drop-hint"><Download size={20} /> Drop .spl file to load</div>}
           <div className="panel-heading"><span><FileCode2 size={19} /> Source</span><span className="file-label" title={`${safeFileStem(soundTitle)}.spl`}>{safeFileStem(soundTitle)}.spl</span></div>
-          <div className="editor-wrap"><div ref={gutter} className="line-numbers" aria-hidden="true">{source.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}</div><textarea ref={editor} aria-label="SPL source" spellCheck={false} value={source} onChange={e => updateSource(e.target.value)} onScroll={() => { if (gutter.current && editor.current) gutter.current.scrollTop = editor.current.scrollTop; }} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void render(); } }} /></div>
-          <div className="editor-actions"><span>{source === '' ? 'Empty' : `${source.split('\n').length} lines`}</span><div className="editor-buttons"><button className="action-button" onClick={downloadSource} title="Download sound.spl"><Download size={16} /> Save source</button>{busy ? <button className="action-button" onClick={cancel}><X size={17} /> Cancel</button> : <button className="action-button primary" disabled={!ready} onClick={render}><Play size={16} fill="currentColor" /> Render</button>}</div></div>
+          <div className="editor-wrap"><div ref={gutter} className="line-numbers" aria-hidden="true">{source.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}</div><div className="editor-stack"><pre ref={highlight} className="editor-highlight" aria-hidden="true"><code dangerouslySetInnerHTML={{ __html: highlighted }} /></pre><textarea ref={editor} aria-label="SPL source" spellCheck={false} autoCapitalize="off" autoCorrect="off" value={source} onChange={e => updateSource(e.target.value)} onScroll={() => { const ta = editor.current; if (!ta) return; if (gutter.current) gutter.current.scrollTop = ta.scrollTop; if (highlight.current) { highlight.current.scrollTop = ta.scrollTop; highlight.current.scrollLeft = ta.scrollLeft; } }} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); void render(); } }} /></div></div>
+          <div className="editor-actions"><span>{source === '' ? 'Empty' : `${source.split('\n').length} lines`}</span><div className="editor-buttons"><button className="action-button" onClick={downloadSource} title="Download sound.spl"><Download size={16} /> Save source</button>{busy ? <button className="action-button" onClick={cancel}><X size={17} /> Cancel</button> : <button className="action-button primary" disabled={!ready} onClick={render}><Sparkles size={16} /> Render</button>}</div></div>
           {busy && <div className="render-progress" role="progressbar" aria-label="render progress" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div>}
         </section>
 
@@ -325,10 +377,9 @@ export default function App() {
         </section>
       </div>
       <section className="library-bar" aria-label="Sound library">
-        <a className="brand" href="./" aria-label="SPL home"><span className="brand-icon"><AudioWaveform size={20} /></span><strong>SPL<span>studio</span></strong></a>
-        <span className="library-label">Library:</span>
+        <a className="brand" href="./" aria-label="SPL home"><span className="brand-icon"><AudioWaveform size={20} /></span><strong>SPL</strong></a>
         <nav className="library-chips" aria-label="Examples">{EXAMPLES.map((ex, index) => <button key={ex.id} className={`chip ${example === ex.id ? 'selected' : ''}`} onClick={() => selectExample(index)} aria-current={example === ex.id ? 'true' : undefined}><span className={`example-dot dot-${index % 5}`} /><span>{ex.label}</span></button>)}{sounds.map((s, i) => <span key={s.id} className={`chip chip-user${example === s.id ? ' selected' : ''}`}><button className="chip-main" onClick={() => selectUserSound(s.id)} aria-current={example === s.id ? 'true' : undefined}><span className={`example-dot dot-${(EXAMPLES.length + i) % 5}`} /><span>{s.name}</span></button><button className="chip-remove" onClick={() => removeSound(s.id)} aria-label={`Remove ${s.name}`} title={`Remove ${s.name}`}><X size={14} /></button></span>)}</nav>
-        <button className="new-button" onClick={newSound} aria-label="Create new sound" title="New sound"><Plus size={19} /></button>
+        <button className="new-button" onClick={newSound} aria-label="Create new sound" title="New sound"><Plus size={19} /><span>New sound</span></button>
       </section>
       {(error || diagnostics.length > 0 || (result?.warnings.length ?? 0) > 0) && <section className="diagnostics" role="alert" aria-label="diagnostics">{error && <p>{error}</p>}{diagnostics.map((d, i) => <p key={i}><button onClick={() => jump(d.line)}>{d.line ? `Line ${d.line}` : d.code}</button> {d.code}: {d.message}</p>)}{result?.warnings.map((d, i) => <p key={`warning-${i}`} className="hot">{d.code === 'PEAK_WARNING' ? `${result.stats.overCount} samples exceed full scale. Peak ${result.stats.peak.toFixed(3)}.` : d.message}</p>)}</section>}
       <footer className="version-footer"><span>{footerVersion}</span></footer>

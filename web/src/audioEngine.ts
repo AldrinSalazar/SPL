@@ -31,7 +31,7 @@ export class AudioEngine {
     if (!this.ctx) {
       this.ctx = new AudioContext();
       this.gain = this.ctx.createGain();
-      this.gain.gain.value = 0.2;
+      this.gain.gain.value = 1;
       this.gain.connect(this.ctx.destination);
     }
     if (this.ctx.state === 'suspended') {
